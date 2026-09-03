@@ -4,19 +4,46 @@ that would make the suite flaky across machines or time.
 """
 from __future__ import annotations
 
+import subprocess
+
 from agentop.collectors.network import collect_listening_ports
 from agentop.collectors.ollama import collect_ollama_status
 from agentop.collectors.processes import collect_agent_processes
-from agentop.collectors.system import collect_system_stats
+from agentop.collectors.system import collect_gpu_percent, collect_system_stats
 from agentop.models import AgentProcess
 
 
 def test_system_stats_returns_sane_ranges():
     stats = collect_system_stats()
     assert 0.0 <= stats.cpu_percent <= 100.0
+    assert stats.gpu_percent is None or 0.0 <= stats.gpu_percent <= 100.0
     assert 0.0 <= stats.mem_percent <= 100.0
     assert stats.mem_total_gb > 0
     assert len(stats.cpu_history) >= 1
+
+
+def test_gpu_collector_parses_apple_device_utilization(monkeypatch):
+    completed = subprocess.CompletedProcess(
+        args=["ioreg"],
+        returncode=0,
+        stdout=b'\"PerformanceStatistics\" = {\"Device Utilization %\"=27}',
+        stderr=b"",
+    )
+    monkeypatch.setattr("agentop.collectors.system.sys.platform", "darwin")
+    monkeypatch.setattr("agentop.collectors.system.subprocess.run", lambda *args, **kwargs: completed)
+    assert collect_gpu_percent() == 27.0
+
+
+def test_gpu_collector_returns_none_when_telemetry_is_unavailable(monkeypatch):
+    completed = subprocess.CompletedProcess(
+        args=["ioreg"],
+        returncode=0,
+        stdout=b"no utilization field",
+        stderr=b"",
+    )
+    monkeypatch.setattr("agentop.collectors.system.sys.platform", "darwin")
+    monkeypatch.setattr("agentop.collectors.system.subprocess.run", lambda *args, **kwargs: completed)
+    assert collect_gpu_percent() is None
 
 
 def test_ollama_offline_is_reported_gracefully_not_raised():

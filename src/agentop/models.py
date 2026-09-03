@@ -58,6 +58,7 @@ class AgentProcess:
 @dataclass
 class SystemStats:
     cpu_percent: float = 0.0
+    gpu_percent: float | None = None
     mem_percent: float = 0.0
     mem_used_gb: float = 0.0
     mem_total_gb: float = 0.0
@@ -65,6 +66,7 @@ class SystemStats:
     swap_used_gb: float = 0.0
     swap_total_gb: float = 0.0
     cpu_history: list[float] = field(default_factory=list)
+    gpu_history: list[float] = field(default_factory=list)
     mem_history: list[float] = field(default_factory=list)
 
 

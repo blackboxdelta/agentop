@@ -9,14 +9,19 @@ import asyncio
 import subprocess
 import time
 
+import psutil
 import pytest
-from textual.widgets import Button, DataTable
+from textual.widgets import Button, DataTable, Label
 
 from agentop.models import AgentProcess, Category, Risk
 from agentop.ui.app import AgentopApp
 
 
-def _fake_agent(pid: int, name: str = "sleep") -> AgentProcess:
+def _fake_agent(
+    pid: int,
+    name: str = "sleep",
+    create_time: float | None = None,
+) -> AgentProcess:
     return AgentProcess(
         pid=pid,
         ppid=1,
@@ -26,7 +31,7 @@ def _fake_agent(pid: int, name: str = "sleep") -> AgentProcess:
         cmdline=name,
         cpu_percent=0.0,
         mem_mb=0.0,
-        create_time=time.time(),
+        create_time=time.time() if create_time is None else create_time,
         risk=Risk.LOW,
         session_key=1,
     )
@@ -45,6 +50,7 @@ async def test_app_boots_and_populates_tables():
         # this very test, so both tables should have at least one row.
         assert overview.row_count >= 1
         assert processes.row_count >= 1
+        assert app.query_one("#gpu-value", Label).render() is not None
 
 
 @pytest.mark.asyncio
@@ -137,7 +143,7 @@ async def test_confirming_kill_selected_actually_terminates_the_process():
             await pilot.pause()
             # Inject the disposable subprocess as the sole "selected" agent,
             # bypassing the real OS-wide scan so this test is deterministic.
-            fake = _fake_agent(proc.pid)
+            fake = _fake_agent(proc.pid, create_time=psutil.Process(proc.pid).create_time())
             app._agents = [fake]
             app._selected_agent = fake
 

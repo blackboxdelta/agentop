@@ -22,7 +22,7 @@ dev = [
 requires-dist = [
     { name = "psutil", specifier = ">=5.9.0" },
     { name = "requests", specifier = ">=2.31.0" },
-    { name = "textual", specifier = ">=0.60.0" },
+    { name = "textual", specifier = ">=8.2.8,<9" },
 ]
 
 [package.metadata.requires-dev]

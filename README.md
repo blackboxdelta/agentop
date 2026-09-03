@@ -30,6 +30,9 @@ agentop
 - **Overview** — agent processes grouped by category (Copilot CLI, MCP tool
   servers, WorkIQ, model servers, Claude/ChatGPT/Cursor desktop apps), each
   with a live process count, total CPU%, and total memory.
+- **System strip** — live CPU, Apple GPU, memory, swap, and Ollama status.
+  GPU telemetry uses macOS's AGXAccelerator counters and shows `N/A` on
+  unsupported platforms.
 - **Processes** — every detected agent process individually: PID, category,
   tool name, CPU%, memory, uptime, and a risk rating for what happens if you
   kill it. Click a column header to sort, click a row to select it.

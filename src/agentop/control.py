@@ -18,6 +18,8 @@ import signal
 from dataclasses import dataclass, field
 from enum import Enum
 
+import psutil
+
 from agentop.models import AgentProcess, Category, Risk, RISK_ORDER
 
 
@@ -86,6 +88,41 @@ def execute_kill(plan: KillPlan, *, force: bool = False) -> list[KillResult]:
     sig = signal.SIGKILL if force else signal.SIGTERM
     results: list[KillResult] = []
     for target in plan.targets:
+        try:
+            live_create_time = psutil.Process(target.pid).create_time()
+        except psutil.NoSuchProcess:
+            results.append(
+                KillResult(
+                    pid=target.pid,
+                    name=target.name,
+                    success=False,
+                    signal_used=sig.name,
+                    error="already exited",
+                )
+            )
+            continue
+        except (psutil.AccessDenied, psutil.ZombieProcess):
+            results.append(
+                KillResult(
+                    pid=target.pid,
+                    name=target.name,
+                    success=False,
+                    signal_used=sig.name,
+                    error="could not verify process identity",
+                )
+            )
+            continue
+        if abs(live_create_time - target.create_time) > 0.01:
+            results.append(
+                KillResult(
+                    pid=target.pid,
+                    name=target.name,
+                    success=False,
+                    signal_used=sig.name,
+                    error="PID reused; identity mismatch",
+                )
+            )
+            continue
         try:
             os.kill(target.pid, sig)
             results.append(KillResult(pid=target.pid, name=target.name, success=True, signal_used=sig.name))

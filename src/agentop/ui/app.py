@@ -58,17 +58,21 @@ def _fmt_uptime(seconds: float) -> str:
 
 
 class StatsBar(Static):
-    """Top strip: CPU/mem/swap sparklines + numeric readouts + Ollama badge."""
+    """Top strip: CPU/GPU/memory sparklines, swap, and Ollama status."""
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="stats-row"):
             with Horizontal(classes="stat-block"):
                 yield Label("CPU", classes="stat-label")
-                yield Sparkline([], id="cpu-spark")
+                yield Sparkline([], min_color="#1f6f78", max_color="#45d4a4", id="cpu-spark")
                 yield Label("--%", id="cpu-value", classes="stat-value")
             with Horizontal(classes="stat-block"):
+                yield Label("GPU", classes="stat-label")
+                yield Sparkline([], min_color="#5847a8", max_color="#bd77ff", id="gpu-spark")
+                yield Label("--%", id="gpu-value", classes="stat-value")
+            with Horizontal(classes="stat-block"):
                 yield Label("MEM", classes="stat-label")
-                yield Sparkline([], id="mem-spark")
+                yield Sparkline([], min_color="#715225", max_color="#f0b15a", id="mem-spark")
                 yield Label("--%", id="mem-value", classes="stat-value")
             yield Label("SWAP --%", id="swap-value", classes="stat-value")
             yield Label("OLLAMA: checking...", id="ollama-badge", classes="stat-value")
@@ -76,6 +80,10 @@ class StatsBar(Static):
     def update_stats(self, stats: SystemStats, ollama: OllamaStatus) -> None:
         self.query_one("#cpu-spark", Sparkline).data = stats.cpu_history or [0.0]
         self.query_one("#cpu-value", Label).update(f"{stats.cpu_percent:5.1f}%")
+        self.query_one("#gpu-spark", Sparkline).data = stats.gpu_history or [0.0]
+        self.query_one("#gpu-value", Label).update(
+            f"{stats.gpu_percent:5.1f}%" if stats.gpu_percent is not None else "  N/A"
+        )
         self.query_one("#mem-spark", Sparkline).data = stats.mem_history or [0.0]
         self.query_one("#mem-value", Label).update(
             f"{stats.mem_percent:5.1f}% ({stats.mem_used_gb:.1f}/{stats.mem_total_gb:.1f}GB)"
@@ -317,8 +325,12 @@ class AgentopApp(App):
     def _refresh_force_kill_button(self, agents: list[AgentProcess]) -> None:
         if not self._pending_force_targets:
             return
-        alive_pids = {a.pid for a in agents}
-        still_alive = [a for a in self._pending_force_targets if a.pid in alive_pids]
+        live_by_pid = {agent.pid: agent for agent in agents}
+        still_alive = []
+        for target in self._pending_force_targets:
+            live = live_by_pid.get(target.pid)
+            if live is not None and live.create_time == target.create_time:
+                still_alive.append(live)
         self._pending_force_targets = still_alive
         btn = self.query_one("#btn-force-kill", Button)
         btn.label = f"Force Kill Remaining ({len(still_alive)})"

@@ -12,11 +12,20 @@ import os
 import subprocess
 import time
 
+import psutil
+
 from agentop.control import KillScope, build_kill_plan, execute_kill
 from agentop.models import AgentProcess, Category, Risk
 
 
-def _agent(pid: int, ppid: int, category: Category, risk: Risk, name: str = "proc") -> AgentProcess:
+def _agent(
+    pid: int,
+    ppid: int,
+    category: Category,
+    risk: Risk,
+    name: str = "proc",
+    create_time: float | None = None,
+) -> AgentProcess:
     return AgentProcess(
         pid=pid,
         ppid=ppid,
@@ -26,7 +35,7 @@ def _agent(pid: int, ppid: int, category: Category, risk: Risk, name: str = "pro
         cmdline=name,
         cpu_percent=0.0,
         mem_mb=0.0,
-        create_time=time.time(),
+        create_time=time.time() if create_time is None else create_time,
         risk=risk,
         session_key=ppid,
     )
@@ -77,7 +86,14 @@ def test_empty_fleet_produces_empty_plan():
 def test_execute_kill_terminates_a_real_process():
     proc = subprocess.Popen(["sleep", "30"])
     try:
-        agent = _agent(proc.pid, os.getpid(), Category.OTHER_AGENT, Risk.LOW, "sleep")
+        agent = _agent(
+            proc.pid,
+            os.getpid(),
+            Category.OTHER_AGENT,
+            Risk.LOW,
+            "sleep",
+            psutil.Process(proc.pid).create_time(),
+        )
         plan = build_kill_plan(KillScope.SINGLE, [agent], pid=proc.pid)
         results = execute_kill(plan)
         assert len(results) == 1
@@ -104,7 +120,17 @@ def test_execute_kill_reports_already_exited():
 def test_execute_kill_bulk_reports_one_result_per_target():
     procs = [subprocess.Popen(["sleep", "30"]) for _ in range(3)]
     try:
-        agents = [_agent(p.pid, os.getpid(), Category.MCP_TOOL, Risk.LOW, f"sleep{i}") for i, p in enumerate(procs)]
+        agents = [
+            _agent(
+                p.pid,
+                os.getpid(),
+                Category.MCP_TOOL,
+                Risk.LOW,
+                f"sleep{i}",
+                psutil.Process(p.pid).create_time(),
+            )
+            for i, p in enumerate(procs)
+        ]
         plan = build_kill_plan(KillScope.ALL, agents)
         results = execute_kill(plan)
         assert len(results) == 3
@@ -121,7 +147,14 @@ def test_execute_kill_bulk_reports_one_result_per_target():
 def test_execute_kill_force_uses_sigkill():
     proc = subprocess.Popen(["sleep", "30"])
     try:
-        agent = _agent(proc.pid, os.getpid(), Category.OTHER_AGENT, Risk.LOW, "sleep")
+        agent = _agent(
+            proc.pid,
+            os.getpid(),
+            Category.OTHER_AGENT,
+            Risk.LOW,
+            "sleep",
+            psutil.Process(proc.pid).create_time(),
+        )
         plan = build_kill_plan(KillScope.SINGLE, [agent], pid=proc.pid)
         results = execute_kill(plan, force=True)
         assert results[0].signal_used == "SIGKILL"
@@ -130,3 +163,21 @@ def test_execute_kill_force_uses_sigkill():
         if proc.poll() is None:
             proc.kill()
             proc.wait(timeout=5)
+
+
+def test_execute_kill_refuses_reused_pid(monkeypatch):
+    class ReusedProcess:
+        def create_time(self):
+            return 200.0
+
+    kill_calls: list[tuple[int, int]] = []
+    monkeypatch.setattr("agentop.control.psutil.Process", lambda pid: ReusedProcess())
+    monkeypatch.setattr("agentop.control.os.kill", lambda pid, sig: kill_calls.append((pid, sig)))
+
+    agent = _agent(123, 1, Category.MCP_TOOL, Risk.LOW, create_time=100.0)
+    plan = build_kill_plan(KillScope.SINGLE, [agent], pid=123)
+    results = execute_kill(plan, force=True)
+
+    assert results[0].success is False
+    assert results[0].error == "PID reused; identity mismatch"
+    assert kill_calls == []
