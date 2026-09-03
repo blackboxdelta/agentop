@@ -1,0 +1,71 @@
+/* agentop — btop-inspired dark theme */
+
+Screen {
+    background: $background;
+}
+
+#stats-row {
+    height: 3;
+    padding: 0 1;
+    background: $panel;
+    border-bottom: solid $primary;
+}
+
+.stat-block {
+    width: auto;
+    height: 3;
+    align: left middle;
+    margin-right: 3;
+}
+
+.stat-label {
+    width: auto;
+    color: $text-muted;
+    padding: 0 1;
+}
+
+.stat-value {
+    width: auto;
+    padding: 0 1;
+    text-style: bold;
+}
+
+.stat-value.ok {
+    color: $success;
+}
+
+.stat-value.offline {
+    color: $error;
+}
+
+Sparkline {
+    width: 20;
+    height: 1;
+    margin: 1 0;
+}
+
+TabbedContent {
+    height: 1fr;
+}
+
+DataTable {
+    height: 1fr;
+}
+
+.section-label {
+    padding: 1 1 0 1;
+    text-style: bold underline;
+}
+
+#toolbar {
+    height: 3;
+    align: left middle;
+    padding: 0 1;
+    background: $panel;
+    border-top: solid $primary;
+}
+
+#toolbar Button {
+    margin-right: 1;
+    min-width: 10;
+}
