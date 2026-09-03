@@ -163,7 +163,9 @@ class AgentopApp(App):
         self.query_one("#process-table", DataTable).add_columns(
             "PID", "Category", "Tool", "CPU %", "Memory", "Uptime", "Risk"
         )
-        self.query_one("#loaded-models-table", DataTable).add_columns("Model", "Size", "Processor", "Context")
+        self.query_one("#loaded-models-table", DataTable).add_columns(
+            "Model", "Size", "Processor", "Memory (GB)", "Context"
+        )
         self.query_one("#available-models-table", DataTable).add_columns("Model")
         self.query_one("#network-table", DataTable).add_columns("Port", "PID", "Process", "Category")
 
@@ -233,7 +235,13 @@ class AgentopApp(App):
         loaded = self.query_one("#loaded-models-table", DataTable)
         loaded.clear()
         for m in ollama.loaded_models:
-            loaded.add_row(m.name, f"{m.size_gb:.1f} GB", m.processor, str(m.context) if m.context else "-")
+            loaded.add_row(
+                m.name,
+                f"{m.size_gb:.1f} GB",
+                m.processor,
+                f"{m.memory_gb:.1f}",
+                str(m.context) if m.context else "-",
+            )
 
         available = self.query_one("#available-models-table", DataTable)
         available.clear()

@@ -75,6 +75,7 @@ class OllamaModel:
     name: str
     size_gb: float
     processor: str
+    memory_gb: float
     context: int
 
 

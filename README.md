@@ -36,8 +36,8 @@ agentop
 - **Processes** — every detected agent process individually: PID, category,
   tool name, CPU%, memory, uptime, and a risk rating for what happens if you
   kill it. Click a column header to sort, click a row to select it.
-- **Models** — Ollama status: loaded models (with GPU/CPU split and context
-  size) and all locally available models.
+- **Models** — Ollama status: loaded models (with GPU/CPU split, live
+  accelerator memory in GB, and context size) and all locally available models.
 - **Network** — listening ports owned by agent processes.
 
 ## Kill switch

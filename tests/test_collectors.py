@@ -61,6 +61,46 @@ def test_ollama_online_reports_version_when_running():
     assert status.version != ""
 
 
+def test_ollama_loaded_model_captures_accelerator_memory_in_gb(monkeypatch):
+    gib = 1024**3
+
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    def fake_get(url, timeout):
+        if url.endswith("/api/version"):
+            return Response({"version": "test"})
+        if url.endswith("/api/ps"):
+            return Response(
+                {
+                    "models": [
+                        {
+                            "name": "test-model",
+                            "size": 10 * gib,
+                            "size_vram": 8 * gib,
+                            "context_length": 4096,
+                        }
+                    ]
+                }
+            )
+        if url.endswith("/api/tags"):
+            return Response({"models": [{"name": "test-model"}]})
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr("agentop.collectors.ollama.requests.get", fake_get)
+    status = collect_ollama_status("http://test")
+
+    assert status.loaded_models[0].processor == "80% GPU"
+    assert status.loaded_models[0].memory_gb == 8.0
+
+
 def test_collect_agent_processes_returns_list_without_raising():
     procs = collect_agent_processes()
     assert isinstance(procs, list)

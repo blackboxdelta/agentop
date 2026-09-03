@@ -40,6 +40,7 @@ def collect_ollama_status(base_url: str = "http://localhost:11434") -> OllamaSta
                     name=m.get("name", "unknown"),
                     size_gb=size / (1024**3),
                     processor=processor,
+                    memory_gb=size_vram / (1024**3),
                     context=m.get("context_length", 0) or 0,
                 )
             )

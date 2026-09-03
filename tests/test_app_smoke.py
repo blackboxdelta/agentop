@@ -13,7 +13,7 @@ import psutil
 import pytest
 from textual.widgets import Button, DataTable, Label
 
-from agentop.models import AgentProcess, Category, Risk
+from agentop.models import AgentProcess, Category, OllamaModel, OllamaStatus, Risk
 from agentop.ui.app import AgentopApp
 
 
@@ -70,6 +70,43 @@ async def test_all_tabs_are_reachable_by_click():
             await pilot.click(tab)
             await pilot.pause()
         # No exception means every tab mounted and switched cleanly.
+
+
+@pytest.mark.asyncio
+async def test_models_table_shows_memory_after_processor():
+    app = AgentopApp(refresh_interval=100)
+    app._trigger_refresh = lambda: None
+    async with app.run_test(size=(120, 45)) as pilot:
+        app._update_models_tables(
+            OllamaStatus(
+                online=True,
+                loaded_models=[
+                    OllamaModel(
+                        name="test-model",
+                        size_gb=10.0,
+                        processor="80% GPU",
+                        memory_gb=8.0,
+                        context=4096,
+                    )
+                ],
+            )
+        )
+        await pilot.pause()
+        table = app.query_one("#loaded-models-table", DataTable)
+        assert [str(column.label) for column in table.columns.values()] == [
+            "Model",
+            "Size",
+            "Processor",
+            "Memory (GB)",
+            "Context",
+        ]
+        assert [str(cell) for cell in table.get_row_at(0)] == [
+            "test-model",
+            "10.0 GB",
+            "80% GPU",
+            "8.0",
+            "4096",
+        ]
 
 
 @pytest.mark.asyncio
