@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import sqlite3
 import time
+from contextlib import contextmanager
+from collections.abc import Iterator
 
 import psutil
 
@@ -28,7 +30,7 @@ class EventStore:
 
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.executescript(
                 """
                 PRAGMA journal_mode=WAL;
@@ -102,6 +104,15 @@ class EventStore:
         connection.row_factory = sqlite3.Row
         return connection
 
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        connection = self._connect()
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
+
     def record_event(
         self,
         level: str,
@@ -111,7 +122,7 @@ class EventStore:
         model: str = "",
         timestamp: float | None = None,
     ) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 """
                 INSERT INTO events(timestamp, level, kind, model, message)
@@ -121,7 +132,7 @@ class EventStore:
             )
 
     def recent_events(self, limit: int = 20) -> list[EventRecord]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             rows = connection.execute(
                 """
                 SELECT timestamp, level, kind, model, message
@@ -146,7 +157,7 @@ class EventStore:
             owner_started_at = psutil.Process(owner_pid).create_time()
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             owner_started_at = None
-        with self._connect() as connection:
+        with self._connection() as connection:
             cursor = connection.execute(
                 """
                 INSERT INTO completions(
@@ -165,7 +176,7 @@ class EventStore:
             return int(cursor.lastrowid)
 
     def finish_request(self, request_id: int, record: CompletionRecord) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             cursor = connection.execute(
                 """
                 UPDATE completions
@@ -207,7 +218,7 @@ class EventStore:
         self.finish_request(request_id, record)
 
     def set_pinned(self, model: str, pinned: bool) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 """
                 INSERT INTO pins(model, pinned, updated_at) VALUES (?, ?, ?)
@@ -218,7 +229,7 @@ class EventStore:
             )
 
     def pinned_models(self) -> set[str]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             rows = connection.execute(
                 "SELECT model FROM pins WHERE pinned = 1"
             ).fetchall()
@@ -236,7 +247,7 @@ class EventStore:
         if _recover:
             self.recover_stale_requests(now=now)
         since = now - reliability_window
-        with self._connect() as connection:
+        with self._connection() as connection:
             rows = connection.execute(
                 """
                 SELECT * FROM completions
@@ -343,7 +354,7 @@ class EventStore:
         max_age_seconds: float = 600,
     ) -> int:
         now = now or time.time()
-        with self._connect() as connection:
+        with self._connection() as connection:
             stale_rows = connection.execute(
                 """
                 SELECT id, model, started_at, owner_pid, owner_started_at
@@ -400,7 +411,7 @@ class EventStore:
 
     def cleanup(self, retention_days: int = 30) -> None:
         cutoff = time.time() - retention_days * 86400
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute("DELETE FROM events WHERE timestamp < ?", (cutoff,))
             connection.execute(
                 "DELETE FROM completions WHERE started_at < ?",

@@ -164,7 +164,7 @@ async def test_interrupted_upstream_stream_is_recorded_as_failed(tmp_path):
                 json={"model": "test-model", "stream": True},
             )
 
-    with store._connect() as connection:
+    with store._connection() as connection:
         row = connection.execute(
             """
             SELECT success, error_type FROM completions
@@ -205,7 +205,7 @@ async def test_cancellation_before_headers_finalizes_request(tmp_path):
         with pytest.raises(asyncio.CancelledError):
             await task
 
-    with store._connect() as connection:
+    with store._connection() as connection:
         row = connection.execute(
             "SELECT success, error_type FROM completions ORDER BY id DESC LIMIT 1"
         ).fetchone()

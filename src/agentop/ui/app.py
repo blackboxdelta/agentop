@@ -473,7 +473,7 @@ class AgentopApp(App):
         self.set_interval(3600, self._trigger_store_maintenance)
         self._trigger_store_maintenance()
         self._update_responsive_class(self.size.width)
-        self._trigger_refresh()
+        self.call_after_refresh(self._trigger_refresh)
 
     async def on_unmount(self) -> None:
         if self._owns_client:

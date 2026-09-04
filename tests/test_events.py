@@ -72,7 +72,7 @@ def test_event_store_persists_events_pins_and_completion_metrics(tmp_path):
     assert metrics.sessions[0].client in {"client-a", "client-b"}
 
     # Reopening in the same live owner process must not corrupt active rows.
-    with reopened._connect() as connection:
+    with reopened._connection() as connection:
         row = connection.execute(
             "SELECT completed_at FROM completions WHERE id = ?", (active_id,)
         ).fetchone()
@@ -96,7 +96,7 @@ def test_metrics_recovers_old_orphans_but_keeps_recent_requests_active(tmp_path)
     now = 10_000.0
     old_id = store.begin_request("model", "old-client", now - 700)
     recent_id = store.begin_request("model", "recent-client", now - 5)
-    with store._connect() as connection:
+    with store._connection() as connection:
         connection.execute(
             "UPDATE completions SET owner_pid = ? WHERE id = ?",
             (999_999_999, old_id),
@@ -105,7 +105,7 @@ def test_metrics_recovers_old_orphans_but_keeps_recent_requests_active(tmp_path)
     metrics = store.model_metrics("model", now=now)
     assert metrics.in_flight == 1
 
-    with store._connect() as connection:
+    with store._connection() as connection:
         old = connection.execute(
             "SELECT error_type FROM completions WHERE id = ?", (old_id,)
         ).fetchone()
@@ -123,7 +123,7 @@ def test_long_running_request_with_live_owner_is_not_recovered(tmp_path):
     request_id = store.begin_request("model", "client", now - 3600)
     metrics = store.model_metrics("model", now=now)
     assert metrics.in_flight == 1
-    with store._connect() as connection:
+    with store._connection() as connection:
         row = connection.execute(
             "SELECT completed_at FROM completions WHERE id = ?",
             (request_id,),
