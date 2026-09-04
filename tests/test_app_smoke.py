@@ -549,6 +549,13 @@ async def test_changed_eviction_plan_is_reconfirmed_before_execution(
     )
     app = AgentopApp(config=config, client=client, store=store)
     app._trigger_refresh = lambda: None
+    confirmed_plans = []
+
+    async def approve_preflight(screen):
+        confirmed_plans.append(screen.plan)
+        return True
+
+    app.push_screen_wait = approve_preflight
     monkeypatch.setattr(
         "agentop.ui.app.collect_system_stats",
         lambda: SystemStats(mem_used_gb=30, mem_total_gb=36),
@@ -558,16 +565,12 @@ async def test_changed_eviction_plan_is_reconfirmed_before_execution(
         app._ollama_status = initial
         app._selected_model_name = "target"
         app._update_models_tables(initial)
-        app.run_worker(app._warm_selected_model())
-        await _wait_until(lambda: len(app.screen_stack) == 2)
-        first_modal = app.screen
-        await first_modal.dismiss(True)
-        await _wait_until(
-            lambda: len(app.screen_stack) == 2 and app.screen is not first_modal
-        )
-        await app.screen.dismiss(True)
-        await _wait_until(lambda: ("unload", "model-b") in client.calls)
+        await app._warm_selected_model()
 
+    assert [plan.evictions for plan in confirmed_plans] == [
+        ["model-a"],
+        ["model-b"],
+    ]
     assert ("unload", "model-a") not in client.calls
     assert ("unload", "model-b") in client.calls
 
