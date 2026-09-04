@@ -74,6 +74,14 @@ class FakeOllamaClient:
         return None
 
 
+async def _wait_until(predicate, timeout: float = 5.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not predicate():
+        if asyncio.get_running_loop().time() >= deadline:
+            raise TimeoutError("condition was not met before timeout")
+        await asyncio.sleep(0.02)
+
+
 def _fake_agent(
     pid: int,
     name: str = "sleep",
@@ -405,7 +413,9 @@ async def test_failed_warm_rolls_back_confirmed_evictions(tmp_path, monkeypatch)
         app.run_worker(app._warm_selected_model())
         await pilot.pause()
         await pilot.click("#preflight-confirm")
-        await pilot.pause(0.5)
+        await _wait_until(
+            lambda: ("warm", "resident", "5m", 4096) in client.calls
+        )
 
     assert ("unload", "resident") in client.calls
     assert ("warm", "target", "5m", None) in client.calls
@@ -492,7 +502,9 @@ async def test_cancelled_warm_restores_evicted_models(tmp_path, monkeypatch):
         await pilot.click("#preflight-confirm")
         await asyncio.wait_for(client.target_started.wait(), 2)
         worker.cancel()
-        await pilot.pause(0.2)
+        await _wait_until(
+            lambda: ("warm", "resident", "5m", 4096) in client.calls
+        )
 
     assert ("unload", "resident") in client.calls
     assert ("warm", "resident", "5m", 4096) in client.calls
@@ -547,12 +559,14 @@ async def test_changed_eviction_plan_is_reconfirmed_before_execution(
         app._selected_model_name = "target"
         app._update_models_tables(initial)
         app.run_worker(app._warm_selected_model())
-        await pilot.pause()
+        await _wait_until(lambda: len(app.screen_stack) == 2)
+        first_modal = app.screen
         await pilot.click("#preflight-confirm")
-        await pilot.pause()
-        assert len(app.screen_stack) == 2
+        await _wait_until(
+            lambda: len(app.screen_stack) == 2 and app.screen is not first_modal
+        )
         await pilot.click("#preflight-confirm")
-        await pilot.pause(0.5)
+        await _wait_until(lambda: ("unload", "model-b") in client.calls)
 
     assert ("unload", "model-a") not in client.calls
     assert ("unload", "model-b") in client.calls

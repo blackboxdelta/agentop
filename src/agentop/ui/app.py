@@ -530,6 +530,8 @@ class AgentopApp(App):
             asyncio.to_thread(self.store.all_model_metrics, model_names),
             asyncio.to_thread(self.store.pinned_models),
         )
+        if not self.is_running or not self.is_mounted:
+            return
         self._agents = agents
         self._system_stats = system_stats
         self._ollama_status = ollama_status
@@ -955,9 +957,11 @@ class AgentopApp(App):
             )
             for event in events
         ]
-        self.query_one("#model-events", Static).update(
-            "\n".join(lines) if lines else "Waiting for model activity."
-        )
+        targets = list(self.query("#model-events"))
+        if targets:
+            targets[0].update(
+                "\n".join(lines) if lines else "Waiting for model activity."
+            )
 
     def _update_network_table(self, ports: list[PortInfo]) -> None:
         table = self.query_one("#network-table", DataTable)
