@@ -9,7 +9,12 @@ import subprocess
 from agentop.collectors.network import collect_listening_ports
 from agentop.collectors.ollama import collect_ollama_status
 from agentop.collectors.processes import collect_agent_processes
-from agentop.collectors.system import collect_gpu_percent, collect_system_stats
+from agentop.collectors.system import (
+    collect_gpu_percent,
+    collect_system_stats,
+    parse_apple_gpu_metrics,
+    parse_rocm_smi_metrics,
+)
 from agentop.models import AgentProcess
 
 
@@ -46,6 +51,38 @@ def test_gpu_collector_returns_none_when_telemetry_is_unavailable(monkeypatch):
     assert collect_gpu_percent() is None
 
 
+def test_apple_gpu_parser_captures_unified_memory():
+    metrics = parse_apple_gpu_metrics(
+        b'\"Device Utilization %\"=42,\"In use system memory\"=2147483648',
+        36.0,
+    )
+    assert metrics.vendor == "Apple"
+    assert metrics.utilization_percent == 42
+    assert metrics.memory_used_gb == 2.0
+    assert metrics.memory_total_gb is None
+
+
+def test_rocm_parser_captures_util_memory_temperature_and_power():
+    metrics = parse_rocm_smi_metrics(
+        """
+        {"card0": {
+          "GPU use (%)": "55",
+          "VRAM Total Memory (B)": "17179869184",
+          "VRAM Total Used Memory (B)": "4294967296",
+          "Temperature (Sensor edge) (C)": "64.0",
+          "Average Graphics Package Power (W)": "118.0"
+        }}
+        """
+    )
+    assert metrics is not None
+    assert metrics.vendor == "AMD"
+    assert metrics.utilization_percent == 55
+    assert metrics.memory_used_gb == 4.0
+    assert metrics.memory_total_gb == 16.0
+    assert metrics.temperature_c == 64
+    assert metrics.power_w == 118
+
+
 def test_ollama_offline_is_reported_gracefully_not_raised():
     # Port 1 is a privileged, essentially-never-listening port — connection
     # should fail fast and be reported as offline rather than raising.
@@ -74,7 +111,7 @@ def test_ollama_loaded_model_captures_accelerator_memory_in_gb(monkeypatch):
         def json(self):
             return self.payload
 
-    def fake_get(url, timeout):
+    def fake_get(url, timeout, trust_env):
         if url.endswith("/api/version"):
             return Response({"version": "test"})
         if url.endswith("/api/ps"):
@@ -109,7 +146,7 @@ def test_ollama_loaded_model_captures_accelerator_memory_in_gb(monkeypatch):
             )
         raise AssertionError(f"Unexpected URL: {url}")
 
-    monkeypatch.setattr("agentop.collectors.ollama.requests.get", fake_get)
+    monkeypatch.setattr("agentop.collectors.ollama.httpx.get", fake_get)
     status = collect_ollama_status("http://test")
 
     assert status.loaded_models[0].processor == "80% GPU"

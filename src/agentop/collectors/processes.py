@@ -47,6 +47,11 @@ def _extract_mcp_subtype(cmdline: list[str]) -> str:
     return "unknown"
 
 
+def _executable_stem(value: str) -> str:
+    base = value.replace("\\", "/").rsplit("/", 1)[-1].casefold()
+    return base[:-4] if base.endswith(".exe") else base
+
+
 def classify(exe: str | None, cmdline: list[str] | None, name: str | None) -> ClassifyResult | None:
     """Return a (category, subtype, risk) classification, or None to exclude.
 
@@ -58,14 +63,23 @@ def classify(exe: str | None, cmdline: list[str] | None, name: str | None) -> Cl
     name = name or ""
     cmdline = cmdline or []
     joined = " ".join(cmdline).lower()
+    command_tokens = [token.casefold() for token in cmdline]
+    base = _executable_stem(exe or name)
+    normalized_exe = exe.replace("\\", "/").casefold()
 
     # --- Model servers (Ollama) ---
-    if "ollama.app/contents/resources/ollama" in exe.lower() and "serve" in cmdline:
+    if base == "ollama" and "serve" in command_tokens:
         return ClassifyResult(Category.MODEL_SERVER, "ollama-server", Risk.MEDIUM)
-    if "ollama.app/contents/macos/ollama" in exe.lower():
+    if "ollama.app/contents/macos/ollama" in normalized_exe:
         return ClassifyResult(Category.MODEL_SERVER, "ollama-app", Risk.MEDIUM)
-    if name == "llama-server" or "llama-server" in exe.lower():
+    if base in {
+        "llama-server",
+        "llama_server",
+        "ollama_llama_server",
+    }:
         return ClassifyResult(Category.MODEL_SERVER, "llama-server (inference)", Risk.HIGH)
+    if base == "ollama":
+        return ClassifyResult(Category.MODEL_SERVER, "ollama-app", Risk.MEDIUM)
 
     # --- Claude Desktop ---
     if "claude.app/contents/macos/claude" in exe.lower():
@@ -92,7 +106,7 @@ def classify(exe: str | None, cmdline: list[str] | None, name: str | None) -> Cl
         return ClassifyResult(Category.CURSOR, "helper", Risk.LOW)
 
     # --- Copilot CLI session (this tool's own family) ---
-    if "github-copilot-sdk/cli/" in exe.lower() and exe.rstrip("/").lower().endswith("/copilot"):
+    if "github-copilot-sdk/cli/" in normalized_exe and base == "copilot":
         return ClassifyResult(Category.COPILOT_SESSION, "cli", Risk.HIGH)
 
     # --- Copilot VS Code extension host (headless) ---
@@ -104,7 +118,6 @@ def classify(exe: str | None, cmdline: list[str] | None, name: str | None) -> Cl
         return ClassifyResult(Category.MCP_TOOL, "computer-use", Risk.LOW)
 
     # --- agency runtime MCP tool servers ---
-    base = exe.rsplit("/", 1)[-1] if exe else name
     if base == "agency" and "mcp" in cmdline:
         subtype = _extract_mcp_subtype(cmdline)
         return ClassifyResult(Category.MCP_TOOL, subtype, Risk.LOW)

@@ -1,0 +1,23 @@
+[ollama]
+# Local or remote Ollama endpoint. OLLAMA_HOST and --host override this.
+host = "http://localhost:11434"
+
+[polling]
+refresh_interval = 1.0
+tags_interval = 30.0
+request_timeout = 5.0
+model_load_timeout = 600.0
+
+[state]
+# Omit to use the platform default:
+# macOS/Linux: ~/.local/state/agentop/events.db
+# Windows: %LOCALAPPDATA%\\agentop\\events.db
+# path = "~/.local/state/agentop/events.db"
+
+[proxy]
+max_body_bytes = 16777216
+
+[safety]
+# Reserve host memory and include model runtime overhead in load pre-flights.
+memory_headroom_gb = 2.0
+model_memory_overhead = 1.15

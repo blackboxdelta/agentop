@@ -1,0 +1,86 @@
+name: build-and-release
+
+on:
+  push:
+    branches: [master, main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            artifact: agentop-macos-arm64
+            binary: agentop
+            arch: arm64
+          - runner: windows-latest
+            artifact: agentop-windows-x64
+            binary: agentop.exe
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --group dev --locked
+
+      - name: Test
+        run: uv run pytest -q
+
+      - name: Build standalone executable
+        run: uv run pyinstaller --clean agentop.spec
+
+      - name: Verify binary architecture and startup
+        run: >-
+          uv run python scripts/verify_binary.py
+          dist/${{ matrix.binary }}
+          ${{ matrix.arch }}
+
+      - name: Package macOS arm64
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mkdir package
+          cp "dist/${{ matrix.binary }}" package/
+          cp README.md LICENSE config.example.toml package/
+          tar -czf "${{ matrix.artifact }}.tar.gz" -C package .
+          shasum -a 256 "${{ matrix.artifact }}.tar.gz" > "${{ matrix.artifact }}.sha256"
+
+      - name: Package Windows x64
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path package
+          Copy-Item "dist/${{ matrix.binary }}" package/
+          Copy-Item README.md, LICENSE, config.example.toml package/
+          Compress-Archive -Path package/* -DestinationPath "${{ matrix.artifact }}.zip"
+          $hash = (Get-FileHash "${{ matrix.artifact }}.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  ${{ matrix.artifact }}.zip" | Out-File "${{ matrix.artifact }}.sha256" -Encoding ascii
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}.*
+          if-no-files-found: error
+
+      - name: Attach artifacts to tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ matrix.artifact }}.*
+          generate_release_notes: true

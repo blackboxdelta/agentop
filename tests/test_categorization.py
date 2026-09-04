@@ -25,6 +25,23 @@ def test_ollama_tray_app():
     assert r.subtype == "ollama-app"
 
 
+def test_windows_ollama_server_and_worker_are_classified():
+    server = classify(
+        r"C:\Users\user\AppData\Local\Programs\Ollama\ollama.exe",
+        ["ollama.exe", "serve"],
+        "ollama.exe",
+    )
+    worker = classify(
+        r"C:\Users\user\AppData\Local\Programs\Ollama\ollama_llama_server.exe",
+        ["ollama_llama_server.exe"],
+        "ollama_llama_server.exe",
+    )
+    assert server.category is Category.MODEL_SERVER
+    assert server.subtype == "ollama-server"
+    assert worker.category is Category.MODEL_SERVER
+    assert worker.subtype == "llama-server (inference)"
+
+
 def test_llama_server_inference_process_is_high_risk():
     r = classify("/usr/local/bin/llama-server", ["llama-server", "--model", "x"], "llama-server")
     assert r.category is Category.MODEL_SERVER
@@ -77,9 +94,19 @@ def test_cursor_main_app():
 
 def test_copilot_cli_session():
     r = classify(
-        "/Users/dheemanth/Library/Caches/github-copilot-sdk/cli/1.0.80/copilot",
+        "/Users/testuser/Library/Caches/github-copilot-sdk/cli/1.0.80/copilot",
         ["copilot", "--server", "--stdio"],
         "copilot",
+    )
+    assert r.category is Category.COPILOT_SESSION
+    assert r.risk is Risk.HIGH
+
+
+def test_windows_copilot_cli_session():
+    r = classify(
+        r"C:\Users\user\AppData\Local\github-copilot-sdk\cli\1.0.0\copilot.exe",
+        ["copilot.exe", "--server", "--stdio"],
+        "copilot.exe",
     )
     assert r.category is Category.COPILOT_SESSION
     assert r.risk is Risk.HIGH
@@ -101,21 +128,31 @@ def test_copilot_vscode_extension_headless():
 
 
 def test_agency_mcp_simple_tool():
-    r = classify("/Users/dheemanth/.local/bin/agency", ["agency", "mcp", "icm"], "agency")
+    r = classify("/Users/testuser/.local/bin/agency", ["agency", "mcp", "icm"], "agency")
     assert r.category is Category.MCP_TOOL
     assert r.subtype == "icm"
     assert r.risk is Risk.LOW
 
 
+def test_windows_agency_mcp_path_is_classified():
+    r = classify(
+        r"C:\Users\user\.local\bin\agency.exe",
+        ["agency.exe", "mcp", "icm"],
+        "agency.exe",
+    )
+    assert r.category is Category.MCP_TOOL
+    assert r.subtype == "icm"
+
+
 def test_agency_mcp_native_tool():
-    r = classify("/Users/dheemanth/.local/bin/agency", ["agency", "mcp", "native", "kusto"], "agency")
+    r = classify("/Users/testuser/.local/bin/agency", ["agency", "mcp", "native", "kusto"], "agency")
     assert r.category is Category.MCP_TOOL
     assert r.subtype == "kusto (native)"
 
 
 def test_agency_mcp_tool_with_flags():
     r = classify(
-        "/Users/dheemanth/.local/bin/agency",
+        "/Users/testuser/.local/bin/agency",
         ["agency", "mcp", "ado", "--organization", "1esgitops"],
         "agency",
     )
@@ -135,7 +172,7 @@ def test_workiq_mcp_via_npm_exec():
 
 def test_computer_use_mcp_plugin():
     r = classify(
-        "/Users/dheemanth/Library/Caches/copilot/pkg/darwin-arm64/1.0.80/plugins/computer-use/computer-use-mcp",
+        "/Users/testuser/Library/Caches/copilot/pkg/darwin-arm64/1.0.80/plugins/computer-use/computer-use-mcp",
         ["computer-use-mcp"],
         "computer-use-mcp",
     )

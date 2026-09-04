@@ -13,8 +13,6 @@ Split deliberately into two halves:
 """
 from __future__ import annotations
 
-import os
-import signal
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -85,18 +83,19 @@ def execute_kill(plan: KillPlan, *, force: bool = False) -> list[KillResult]:
     per-process KillResult so a bulk kill can partially succeed and report
     exactly which PIDs failed and why.
     """
-    sig = signal.SIGKILL if force else signal.SIGTERM
+    signal_used = "SIGKILL" if force else "SIGTERM"
     results: list[KillResult] = []
     for target in plan.targets:
         try:
-            live_create_time = psutil.Process(target.pid).create_time()
+            process = psutil.Process(target.pid)
+            live_create_time = process.create_time()
         except psutil.NoSuchProcess:
             results.append(
                 KillResult(
                     pid=target.pid,
                     name=target.name,
                     success=False,
-                    signal_used=sig.name,
+                    signal_used=signal_used,
                     error="already exited",
                 )
             )
@@ -107,7 +106,7 @@ def execute_kill(plan: KillPlan, *, force: bool = False) -> list[KillResult]:
                     pid=target.pid,
                     name=target.name,
                     success=False,
-                    signal_used=sig.name,
+                    signal_used=signal_used,
                     error="could not verify process identity",
                 )
             )
@@ -118,36 +117,46 @@ def execute_kill(plan: KillPlan, *, force: bool = False) -> list[KillResult]:
                     pid=target.pid,
                     name=target.name,
                     success=False,
-                    signal_used=sig.name,
+                    signal_used=signal_used,
                     error="PID reused; identity mismatch",
                 )
             )
             continue
         try:
-            os.kill(target.pid, sig)
-            results.append(KillResult(pid=target.pid, name=target.name, success=True, signal_used=sig.name))
-        except ProcessLookupError:
+            if force:
+                process.kill()
+            else:
+                process.terminate()
+            results.append(
+                KillResult(
+                    pid=target.pid,
+                    name=target.name,
+                    success=True,
+                    signal_used=signal_used,
+                )
+            )
+        except psutil.NoSuchProcess:
             results.append(
                 KillResult(
                     pid=target.pid,
                     name=target.name,
                     success=False,
-                    signal_used=sig.name,
+                    signal_used=signal_used,
                     error="already exited",
                 )
             )
-        except PermissionError:
+        except psutil.AccessDenied:
             results.append(
                 KillResult(
                     pid=target.pid,
                     name=target.name,
                     success=False,
-                    signal_used=sig.name,
+                    signal_used=signal_used,
                     error="permission denied",
                 )
             )
         except OSError as exc:
             results.append(
-                KillResult(pid=target.pid, name=target.name, success=False, signal_used=sig.name, error=str(exc))
+                KillResult(pid=target.pid, name=target.name, success=False,                 signal_used=signal_used, error=str(exc))
             )
     return results

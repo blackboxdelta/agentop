@@ -26,18 +26,18 @@ Screen {
 }
 
 TopBar {
-    height: 5;
+    height: 3;
     background: $surface;
     border-bottom: solid $line;
 }
 
 #top-bar {
-    height: 5;
+    height: 3;
 }
 
 #brand {
     width: 30;
-    padding: 1 2;
+    padding: 0 2;
     border-right: solid $line;
 }
 
@@ -52,8 +52,8 @@ TopBar {
 
 .metric-block {
     width: 1fr;
-    min-width: 16;
-    padding: 0 2;
+    min-width: 12;
+    padding: 0 1;
     border-right: solid $line;
 }
 
@@ -110,6 +110,13 @@ TopBar {
     }
 }
 
+#vram-bar Bar {
+    &> .bar--bar, &> .bar--complete {
+        color: $blue;
+        background: $track;
+    }
+}
+
 #memory-bar Bar {
     &> .bar--bar, &> .bar--complete {
         color: $amber;
@@ -126,7 +133,7 @@ TopBar {
 
 #ollama-status {
     width: 28;
-    padding: 1 2;
+    padding: 0 2;
     content-align: right middle;
 }
 
@@ -141,6 +148,10 @@ TopBar {
 
 #ollama-title.offline {
     color: $red;
+}
+
+#ollama-title.stale {
+    color: $amber;
 }
 
 #ollama-detail {
@@ -303,30 +314,69 @@ DataTable > .datatable--odd-row {
 }
 
 #model-details {
-    height: 16;
+    height: 10;
     padding: 0 2;
     color: $text;
 }
 
-#model-fit-bar {
+#model-actions {
+    height: 3;
+    padding: 0 2;
+}
+
+#model-actions Button {
+    height: 3;
+    min-width: 7;
+    margin-right: 1;
+}
+
+#btn-model-warm {
+    background: $green;
+    color: $bg;
+}
+
+#btn-model-unload {
+    background: $red;
+    color: $bg;
+}
+
+#throughput-detail,
+#reliability-detail,
+#sessions-detail,
+#placement-detail {
+    height: auto;
+    min-height: 3;
+    padding: 0 2;
+    color: $text;
+}
+
+#context-bar,
+#placement-bar {
     height: 2;
     margin: 0 2;
 }
 
-#model-fit-bar Bar {
+#context-bar Bar {
+    &> .bar--bar, &> .bar--complete {
+        color: $amber;
+        background: $track;
+    }
+}
+
+#placement-bar Bar {
     &> .bar--bar, &> .bar--complete {
         color: $green;
         background: $track;
     }
 }
 
-#model-fit-detail {
+#context-detail {
     height: 3;
     padding: 0 2;
     color: $muted;
 }
 
-#model-fit-warning {
+#context-warning {
     height: 3;
     padding: 0 2;
 }
@@ -344,8 +394,8 @@ Footer {
 }
 
 .compact #brand {
-    width: 20;
-    padding-left: 1;
+    width: 16;
+    padding: 0 1;
 }
 
 .compact #brand-subtitle,
@@ -354,13 +404,13 @@ Footer {
 }
 
 .compact .metric-block {
-    min-width: 12;
-    padding: 0 1;
+    min-width: 9;
+    padding: 0;
 }
 
 .compact #ollama-status {
-    width: 24;
-    padding: 1;
+    width: 20;
+    padding: 0 1;
 }
 
 .compact #model-sidebar {
@@ -369,6 +419,31 @@ Footer {
 
 .compact #models-main {
     min-width: 0;
+}
+
+.compact .section-heading {
+    height: 1;
+    padding: 0 1;
+}
+
+.compact #resident-models-table {
+    height: 4;
+    margin: 0 1;
+}
+
+.compact #resident-empty {
+    height: 3;
+    margin: 0 1;
+    padding: 1 2;
+}
+
+.compact.detail-open #models-main {
+    display: none;
+}
+
+.compact.detail-open #model-sidebar {
+    display: block;
+    width: 1fr;
 }
 
 .compact #process-toolbar Button {
@@ -382,4 +457,22 @@ Footer {
 
 .narrow #ollama-status {
     width: 20;
+}
+
+.narrow #process-toolbar {
+    layout: grid;
+    grid-size: 3 2;
+    grid-gutter: 0 1;
+    height: 6;
+    overflow: hidden;
+}
+
+.narrow #process-toolbar Button {
+    width: 1fr;
+    margin: 0;
+}
+
+.no-color * {
+    color: $bright;
+    background-tint: transparent;
 }

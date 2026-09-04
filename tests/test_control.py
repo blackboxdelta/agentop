@@ -10,12 +10,19 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import time
 
 import psutil
 
 from agentop.control import KillScope, build_kill_plan, execute_kill
 from agentop.models import AgentProcess, Category, Risk
+
+
+def _sleep_process() -> subprocess.Popen:
+    return subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"]
+    )
 
 
 def _agent(
@@ -84,7 +91,7 @@ def test_empty_fleet_produces_empty_plan():
 
 
 def test_execute_kill_terminates_a_real_process():
-    proc = subprocess.Popen(["sleep", "30"])
+    proc = _sleep_process()
     try:
         agent = _agent(
             proc.pid,
@@ -108,7 +115,7 @@ def test_execute_kill_terminates_a_real_process():
 
 
 def test_execute_kill_reports_already_exited():
-    proc = subprocess.Popen(["true"])
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
     proc.wait(timeout=5)  # already dead by the time we try to signal it
     agent = _agent(proc.pid, os.getpid(), Category.OTHER_AGENT, Risk.LOW, "true")
     plan = build_kill_plan(KillScope.SINGLE, [agent], pid=proc.pid)
@@ -118,7 +125,7 @@ def test_execute_kill_reports_already_exited():
 
 
 def test_execute_kill_bulk_reports_one_result_per_target():
-    procs = [subprocess.Popen(["sleep", "30"]) for _ in range(3)]
+    procs = [_sleep_process() for _ in range(3)]
     try:
         agents = [
             _agent(
@@ -145,7 +152,7 @@ def test_execute_kill_bulk_reports_one_result_per_target():
 
 
 def test_execute_kill_force_uses_sigkill():
-    proc = subprocess.Popen(["sleep", "30"])
+    proc = _sleep_process()
     try:
         agent = _agent(
             proc.pid,
@@ -170,9 +177,14 @@ def test_execute_kill_refuses_reused_pid(monkeypatch):
         def create_time(self):
             return 200.0
 
-    kill_calls: list[tuple[int, int]] = []
+        def kill(self):
+            kill_calls.append("kill")
+
+        def terminate(self):
+            kill_calls.append("terminate")
+
+    kill_calls: list[str] = []
     monkeypatch.setattr("agentop.control.psutil.Process", lambda pid: ReusedProcess())
-    monkeypatch.setattr("agentop.control.os.kill", lambda pid, sig: kill_calls.append((pid, sig)))
 
     agent = _agent(123, 1, Category.MCP_TOOL, Risk.LOW, create_time=100.0)
     plan = build_kill_plan(KillScope.SINGLE, [agent], pid=123)

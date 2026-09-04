@@ -7,13 +7,16 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+import sys
 import time
 from datetime import datetime, timedelta, timezone
 
 import psutil
 import pytest
+import sqlite3
 from textual.widgets import Button, DataTable, Input, Label, Static
 
+from agentop.config import AgentopConfig
 from agentop.models import (
     AgentProcess,
     Category,
@@ -23,7 +26,52 @@ from agentop.models import (
     Risk,
     SystemStats,
 )
+from agentop.events import EventStore
 from agentop.ui.app import AgentopApp, _fmt_remaining
+
+
+@pytest.fixture(autouse=True)
+def isolated_event_store(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "agentop.ui.app.EventStore",
+        lambda path: EventStore(tmp_path / "events.db"),
+    )
+    monkeypatch.setattr(
+        "agentop.ui.app.OllamaClient",
+        lambda config: FakeOllamaClient(),
+    )
+    monkeypatch.setattr(
+        "agentop.ui.app.collect_agent_processes",
+        lambda: [
+            _fake_agent(999_998, name="fixture-agent-a"),
+            _fake_agent(999_999, name="fixture-agent-b"),
+        ],
+    )
+
+
+class FakeOllamaClient:
+    def __init__(self, status=None, fail_warm_for=None):
+        self.calls: list[tuple] = []
+        self.status = status or OllamaStatus(online=True, version="test")
+        self.fail_warm_for = fail_warm_for
+
+    async def poll(self, force_tags=False):
+        return self.status
+
+    async def warm_model(self, model, *, keep_alive="5m", context=None):
+        self.calls.append(("warm", model, keep_alive, context))
+        if model == self.fail_warm_for:
+            raise OSError("simulated warm failure")
+        return {"done": True}
+
+    async def unload_model(self, model):
+        self.calls.append(("unload", model))
+
+    async def pin_model(self, model, pinned):
+        self.calls.append(("pin", model, pinned))
+
+    async def close(self):
+        return None
 
 
 def _fake_agent(
@@ -55,8 +103,8 @@ async def test_app_boots_and_populates_tables():
 
         overview = app.query_one("#overview-table", DataTable)
         processes = app.query_one("#process-table", DataTable)
-        # This dev machine always has at least the Copilot CLI session running
-        # this very test, so both tables should have at least one row.
+        # The autouse fixture provides a deterministic process so this passes
+        # on clean Windows/macOS release runners without local AI apps.
         assert overview.row_count >= 1
         assert processes.row_count >= 1
         assert app.query_one("#gpu-value", Label).render() is not None
@@ -104,17 +152,21 @@ async def test_models_table_shows_memory_after_processor():
         await pilot.pause()
         table = app.query_one("#resident-models-table", DataTable)
         assert [str(column.label) for column in table.columns.values()] == [
+            "State",
             "Model",
-            "Processor",
-            "Memory",
+            "Tok/s",
+            "TTFT",
             "Context",
-            "Expires",
+            "Layers",
+            "Evicts in",
         ]
         assert [str(cell) for cell in table.get_row_at(0)] == [
+            "○ idle",
             "test-model",
+            "-",
+            "-",
+            "0/4.1k",
             "80% GPU",
-            "10.0 GB",
-            "4096",
             "-",
         ]
 
@@ -154,8 +206,8 @@ async def test_models_workspace_filters_and_updates_selected_fit_details():
         assert "qwen2.5-coder:32b" in str(
             app.query_one("#model-details", Static).render()
         )
-        assert "28.5 / 36.0 GB" in str(
-            app.query_one("#model-fit-detail", Static).render()
+        assert "Run clients through `agentop proxy`" in str(
+            app.query_one("#throughput-detail", Static).render()
         )
 
         app.query_one("#model-filter", Input).value = "Q4_K_M"
@@ -190,8 +242,8 @@ async def test_model_poll_failure_does_not_emit_false_unload_event():
                 )
             ],
         )
-        app._update_model_events(loaded)
-        app._update_model_events(
+        await app._update_model_events(loaded)
+        await app._update_model_events(
             OllamaStatus(
                 online=True,
                 loaded_models_error="temporary API failure",
@@ -222,8 +274,8 @@ async def test_ollama_offline_poll_does_not_emit_false_unload_event():
                 )
             ],
         )
-        app._update_model_events(loaded)
-        app._update_model_events(
+        await app._update_model_events(loaded)
+        await app._update_model_events(
             OllamaStatus(online=False, error="temporary version API failure")
         )
         await pilot.pause()
@@ -245,9 +297,265 @@ async def test_models_workspace_remains_usable_in_compact_terminals(size):
         assert app.has_class("compact")
         assert app.query_one("#model-sidebar").display is False
         assert app.query_one("#available-models-table", DataTable).region.width > 0
+        assert app.query_one(".vram-block").display is True
+        screen = app.screen.size.region
+        for metric in app.query(".metric-block"):
+            assert metric.region.center in screen
         if size[0] < 90:
             assert app.has_class("narrow")
             assert app.query_one("#brand").display is False
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.query_one("#models-main").display is False
+            assert app.query_one("#model-sidebar").display is True
+            assert app.query_one("#model-sidebar").region.width == screen.width
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.query_one("#models-main").display is True
+
+
+@pytest.mark.asyncio
+async def test_cold_model_preflight_blocks_warm_until_confirmed():
+    client = FakeOllamaClient()
+    app = AgentopApp(refresh_interval=100, client=client)
+    app._trigger_refresh = lambda: None
+    async with app.run_test(size=(140, 44)) as pilot:
+        app._system_stats = SystemStats(mem_used_gb=34, mem_total_gb=36)
+        status = OllamaStatus(
+            online=True,
+            available_models=[
+                OllamaAvailableModel(name="large", size_gb=12)
+            ],
+        )
+        app._ollama_status = status
+        app._update_models_tables(status)
+        app.run_worker(app._warm_selected_model())
+        await pilot.pause()
+        assert len(app.screen_stack) == 2
+        await pilot.click("#preflight-cancel")
+        await pilot.pause()
+        assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_model_unload_undo_pin_and_trim_controls(tmp_path):
+    client = FakeOllamaClient()
+    store = EventStore(tmp_path / "actions.db")
+    app = AgentopApp(refresh_interval=100, client=client, store=store)
+    app._trigger_refresh = lambda: None
+    async with app.run_test(size=(140, 44)) as pilot:
+        model = OllamaModel(
+            name="resident",
+            size_gb=8,
+            processor="100% GPU",
+            memory_gb=8,
+            gpu_memory_gb=8,
+            context=8192,
+        )
+        status = OllamaStatus(online=True, loaded_models=[model])
+        app._ollama_status = status
+        app._update_models_tables(status)
+
+        await app._toggle_selected_pin()
+        await app._trim_selected_context()
+        await app._unload_selected_model()
+        await app._undo_last_unload()
+        await pilot.pause()
+
+        assert ("pin", "resident", True) in client.calls
+        assert ("warm", "resident", -1, 4096) in client.calls
+        assert ("unload", "resident") in client.calls
+        assert ("warm", "resident", -1, None) in client.calls
+
+
+@pytest.mark.asyncio
+async def test_failed_warm_rolls_back_confirmed_evictions(tmp_path, monkeypatch):
+    resident = OllamaModel(
+        name="resident",
+        size_gb=8,
+        processor="100% GPU",
+        memory_gb=8,
+        gpu_memory_gb=8,
+        context=4096,
+    )
+    target = OllamaAvailableModel(name="target", size_gb=12)
+    status = OllamaStatus(
+        online=True,
+        loaded_models=[resident],
+        available_models=[target],
+    )
+    client = FakeOllamaClient(status=status, fail_warm_for="target")
+    store = EventStore(tmp_path / "rollback.db")
+    config = AgentopConfig(
+        state_path=store.path,
+        memory_headroom_gb=0,
+        model_memory_overhead=1,
+    )
+    app = AgentopApp(config=config, client=client, store=store)
+    app._trigger_refresh = lambda: None
+    monkeypatch.setattr(
+        "agentop.ui.app.collect_system_stats",
+        lambda: SystemStats(mem_used_gb=30, mem_total_gb=36),
+    )
+    async with app.run_test(size=(140, 44)) as pilot:
+        app._system_stats = SystemStats(mem_used_gb=30, mem_total_gb=36)
+        app._ollama_status = status
+        app._selected_model_name = "target"
+        app._update_models_tables(status)
+        app.run_worker(app._warm_selected_model())
+        await pilot.pause()
+        await pilot.click("#preflight-confirm")
+        await pilot.pause(0.5)
+
+    assert ("unload", "resident") in client.calls
+    assert ("warm", "target", "5m", None) in client.calls
+    assert ("warm", "resident", "5m", 4096) in client.calls
+
+
+@pytest.mark.asyncio
+async def test_pin_persistence_failure_compensates_runtime_state(tmp_path):
+    class BrokenPinStore(EventStore):
+        def set_pinned(self, model, pinned):
+            raise sqlite3.OperationalError("disk full")
+
+    model = OllamaModel(
+        name="resident",
+        size_gb=8,
+        processor="100% GPU",
+        memory_gb=8,
+        gpu_memory_gb=8,
+        context=4096,
+    )
+    status = OllamaStatus(online=True, loaded_models=[model])
+    client = FakeOllamaClient(status=status)
+    store = BrokenPinStore(tmp_path / "pins.db")
+    app = AgentopApp(refresh_interval=100, client=client, store=store)
+    app._trigger_refresh = lambda: None
+    async with app.run_test(size=(140, 44)):
+        app._ollama_status = status
+        app._update_models_tables(status)
+        await app._toggle_selected_pin()
+
+    assert ("pin", "resident", True) in client.calls
+    assert ("pin", "resident", False) in client.calls
+    assert app._pinned_models == set()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_warm_restores_evicted_models(tmp_path, monkeypatch):
+    class BlockingClient(FakeOllamaClient):
+        def __init__(self, status):
+            super().__init__(status=status)
+            self.target_started = asyncio.Event()
+
+        async def warm_model(self, model, *, keep_alive="5m", context=None):
+            self.calls.append(("warm", model, keep_alive, context))
+            if model == "target":
+                self.target_started.set()
+                await asyncio.Event().wait()
+            return {"done": True}
+
+    resident = OllamaModel(
+        name="resident",
+        size_gb=8,
+        processor="100% GPU",
+        memory_gb=8,
+        gpu_memory_gb=8,
+        context=4096,
+    )
+    target = OllamaAvailableModel(name="target", size_gb=12)
+    status = OllamaStatus(
+        online=True,
+        loaded_models=[resident],
+        available_models=[target],
+    )
+    client = BlockingClient(status)
+    store = EventStore(tmp_path / "cancel.db")
+    config = AgentopConfig(
+        state_path=store.path,
+        memory_headroom_gb=0,
+        model_memory_overhead=1,
+    )
+    app = AgentopApp(config=config, client=client, store=store)
+    app._trigger_refresh = lambda: None
+    monkeypatch.setattr(
+        "agentop.ui.app.collect_system_stats",
+        lambda: SystemStats(mem_used_gb=30, mem_total_gb=36),
+    )
+    async with app.run_test(size=(140, 44)) as pilot:
+        app._system_stats = SystemStats(mem_used_gb=30, mem_total_gb=36)
+        app._ollama_status = status
+        app._selected_model_name = "target"
+        app._update_models_tables(status)
+        worker = app.run_worker(app._warm_selected_model())
+        await pilot.pause()
+        await pilot.click("#preflight-confirm")
+        await asyncio.wait_for(client.target_started.wait(), 2)
+        worker.cancel()
+        await pilot.pause(0.2)
+
+    assert ("unload", "resident") in client.calls
+    assert ("warm", "resident", "5m", 4096) in client.calls
+
+
+@pytest.mark.asyncio
+async def test_changed_eviction_plan_is_reconfirmed_before_execution(
+    tmp_path, monkeypatch
+):
+    def resident(name):
+        return OllamaModel(
+            name=name,
+            size_gb=8,
+            processor="100% GPU",
+            memory_gb=8,
+            gpu_memory_gb=8,
+            context=4096,
+        )
+
+    target = OllamaAvailableModel(name="target", size_gb=12)
+    initial = OllamaStatus(
+        online=True,
+        loaded_models=[resident("model-a")],
+        available_models=[target],
+    )
+    changed = OllamaStatus(
+        online=True,
+        loaded_models=[resident("model-b")],
+        available_models=[target],
+    )
+
+    class ChangingClient(FakeOllamaClient):
+        async def poll(self, force_tags=False):
+            return changed
+
+    client = ChangingClient(status=changed)
+    store = EventStore(tmp_path / "reconfirm.db")
+    config = AgentopConfig(
+        state_path=store.path,
+        memory_headroom_gb=0,
+        model_memory_overhead=1,
+    )
+    app = AgentopApp(config=config, client=client, store=store)
+    app._trigger_refresh = lambda: None
+    monkeypatch.setattr(
+        "agentop.ui.app.collect_system_stats",
+        lambda: SystemStats(mem_used_gb=30, mem_total_gb=36),
+    )
+    async with app.run_test(size=(140, 44)) as pilot:
+        app._system_stats = SystemStats(mem_used_gb=30, mem_total_gb=36)
+        app._ollama_status = initial
+        app._selected_model_name = "target"
+        app._update_models_tables(initial)
+        app.run_worker(app._warm_selected_model())
+        await pilot.pause()
+        await pilot.click("#preflight-confirm")
+        await pilot.pause()
+        assert len(app.screen_stack) == 2
+        await pilot.click("#preflight-confirm")
+        await pilot.pause(0.5)
+
+    assert ("unload", "model-a") not in client.calls
+    assert ("unload", "model-b") in client.calls
 
 
 @pytest.mark.asyncio
@@ -319,7 +627,9 @@ async def test_confirming_kill_selected_actually_terminates_the_process():
     behind it actually exits. Exercises the exact button-click path whose
     layout bug was fixed above, but for the Confirm button rather than Cancel.
     """
-    proc = subprocess.Popen(["sleep", "30"])
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"]
+    )
     try:
         app = AgentopApp(refresh_interval=100)
         async with app.run_test(size=(120, 45)) as pilot:
