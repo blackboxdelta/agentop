@@ -91,14 +91,35 @@ def test_ollama_loaded_model_captures_accelerator_memory_in_gb(monkeypatch):
                 }
             )
         if url.endswith("/api/tags"):
-            return Response({"models": [{"name": "test-model"}]})
+            return Response(
+                {
+                    "models": [
+                        {
+                            "name": "test-model",
+                            "size": 10 * gib,
+                            "modified_at": "2026-09-03T12:00:00Z",
+                            "details": {
+                                "family": "test-family",
+                                "parameter_size": "7B",
+                                "quantization_level": "Q4_K_M",
+                            },
+                        }
+                    ]
+                }
+            )
         raise AssertionError(f"Unexpected URL: {url}")
 
     monkeypatch.setattr("agentop.collectors.ollama.requests.get", fake_get)
     status = collect_ollama_status("http://test")
 
     assert status.loaded_models[0].processor == "80% GPU"
-    assert status.loaded_models[0].memory_gb == 8.0
+    assert status.loaded_models[0].memory_gb == 10.0
+    assert status.loaded_models[0].gpu_memory_gb == 8.0
+    assert status.available_models[0].name == "test-model"
+    assert status.available_models[0].size_gb == 10.0
+    assert status.available_models[0].family == "test-family"
+    assert status.available_models[0].parameter_size == "7B"
+    assert status.available_models[0].quantization == "Q4_K_M"
 
 
 def test_collect_agent_processes_returns_list_without_raising():

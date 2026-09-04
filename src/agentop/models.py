@@ -76,7 +76,22 @@ class OllamaModel:
     size_gb: float
     processor: str
     memory_gb: float
+    gpu_memory_gb: float
     context: int
+    family: str = ""
+    parameter_size: str = ""
+    quantization: str = ""
+    expires_at: str = ""
+
+
+@dataclass
+class OllamaAvailableModel:
+    name: str
+    size_gb: float
+    modified_at: str = ""
+    family: str = ""
+    parameter_size: str = ""
+    quantization: str = ""
 
 
 @dataclass
@@ -84,7 +99,8 @@ class OllamaStatus:
     online: bool
     version: str = ""
     loaded_models: list[OllamaModel] = field(default_factory=list)
-    available_models: list[str] = field(default_factory=list)
+    available_models: list[OllamaAvailableModel] = field(default_factory=list)
+    loaded_models_error: str = ""
     error: str = ""
 
 

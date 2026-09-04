@@ -1,73 +1,385 @@
-/* agentop — btop-inspired dark theme */
+$bg: #0B0E10;
+$surface: #0E1214;
+$surface-2: #0D1113;
+$selected: #152023;
+$hover: #141A1D;
+$track: #161C1F;
+$line: #1C2225;
+$subtle: #171D20;
+$chip: #232A2E;
+$bright: #E8EEF1;
+$text: #C6D0D6;
+$secondary: #8A98A0;
+$muted: #5C6A72;
+$label: #46525A;
+$timestamp: #3D474D;
+$glyph: #252E33;
+$green: #5EE6A8;
+$blue: #8FA9FF;
+$amber: #E0A65C;
+$red: #F0706E;
+$purple: #C9A6FF;
 
 Screen {
-    background: $background;
+    background: $bg;
+    color: $text;
 }
 
-#stats-row {
-    height: 3;
-    padding: 0 1;
-    background: $panel;
-    border-bottom: solid $primary;
+TopBar {
+    height: 5;
+    background: $surface;
+    border-bottom: solid $line;
 }
 
-.stat-block {
-    width: 1fr;
-    min-width: 13;
-    height: 3;
-    align: left middle;
-    margin-right: 1;
+#top-bar {
+    height: 5;
 }
 
-.stat-label {
-    width: auto;
-    color: $text-muted;
-    padding: 0 1;
+#brand {
+    width: 30;
+    padding: 1 2;
+    border-right: solid $line;
 }
 
-.stat-value {
-    width: auto;
-    padding: 0 1;
+#brand-name {
+    color: $bright;
     text-style: bold;
 }
 
-.stat-value.ok {
-    color: $success;
+#brand-subtitle {
+    color: $secondary;
 }
 
-.stat-value.offline {
-    color: $error;
-}
-
-Sparkline {
+.metric-block {
     width: 1fr;
-    min-width: 4;
-    height: 1;
-    margin: 1 0;
+    min-width: 16;
+    padding: 0 2;
+    border-right: solid $line;
 }
 
-TabbedContent {
+.metric-heading {
+    height: 1;
+}
+
+.metric-name {
+    width: 1fr;
+    color: $label;
+}
+
+.metric-value {
+    width: auto;
+    text-style: bold;
+}
+
+.metric-value.cpu {
+    color: $green;
+}
+
+.metric-value.gpu {
+    color: $blue;
+}
+
+.metric-value.memory {
+    color: $amber;
+}
+
+.metric-value.swap {
+    color: $red;
+}
+
+.metric-block ProgressBar {
+    width: 1fr;
+    height: 1;
+}
+
+.metric-detail {
+    color: $muted;
+}
+
+#cpu-bar Bar {
+    &> .bar--bar, &> .bar--complete {
+        color: $green;
+        background: $track;
+    }
+}
+
+#gpu-bar Bar {
+    &> .bar--bar, &> .bar--complete {
+        color: $blue;
+        background: $track;
+    }
+}
+
+#memory-bar Bar {
+    &> .bar--bar, &> .bar--complete {
+        color: $amber;
+        background: $track;
+    }
+}
+
+#swap-bar Bar {
+    &> .bar--bar, &> .bar--complete {
+        color: $red;
+        background: $track;
+    }
+}
+
+#ollama-status {
+    width: 28;
+    padding: 1 2;
+    content-align: right middle;
+}
+
+#ollama-title {
+    text-align: right;
+    text-style: bold;
+}
+
+#ollama-title.online {
+    color: $green;
+}
+
+#ollama-title.offline {
+    color: $red;
+}
+
+#ollama-detail {
+    color: $muted;
+    text-align: right;
+}
+
+#main-tabs {
     height: 1fr;
+}
+
+Tabs {
+    height: 3;
+    background: $surface;
+    border-bottom: solid $line;
+}
+
+Tab {
+    padding: 0 2;
+    color: $muted;
+}
+
+Tab.-active {
+    color: $bright;
+    text-style: bold;
+}
+
+Underline > .underline--bar {
+    color: $green;
+}
+
+TabPane {
+    padding: 0;
+    background: $bg;
 }
 
 DataTable {
     height: 1fr;
+    background: $bg;
+    color: $text;
 }
 
-.section-label {
-    padding: 1 1 0 1;
-    text-style: bold underline;
+DataTable > .datatable--header {
+    background: $surface-2;
+    color: $secondary;
+    text-style: bold;
 }
 
-#toolbar {
+DataTable > .datatable--cursor {
+    background: $selected;
+    color: $bright;
+}
+
+DataTable:focus > .datatable--cursor {
+    background: $selected;
+    color: $bright;
+}
+
+DataTable > .datatable--hover {
+    background: $hover;
+}
+
+DataTable > .datatable--even-row {
+    background: $bg;
+}
+
+DataTable > .datatable--odd-row {
+    background: $surface-2;
+}
+
+#process-toolbar {
     height: 3;
-    align: left middle;
     padding: 0 1;
-    background: $panel;
-    border-top: solid $primary;
+    background: $surface;
+    border-top: solid $line;
 }
 
-#toolbar Button {
+#process-toolbar Button {
+    height: 3;
     margin-right: 1;
-    min-width: 10;
+    min-width: 12;
+}
+
+#models-layout {
+    height: 1fr;
+}
+
+#models-main {
+    width: 1fr;
+    min-width: 60;
+}
+
+#model-filter-row {
+    height: 3;
+    padding: 0 2;
+    align: left middle;
+    border-bottom: solid $line;
+}
+
+.pane-title {
+    width: 1fr;
+    color: $bright;
+    text-style: bold;
+}
+
+#model-filter {
+    width: 28;
+    height: 3;
+    border: tall $chip;
+    background: $surface;
+}
+
+#model-filter:focus {
+    border: tall $green;
+}
+
+.section-heading {
+    height: 2;
+    padding: 1 2 0 2;
+    color: $muted;
+    text-style: bold;
+}
+
+#resident-models-table {
+    height: 7;
+    margin: 0 2;
+    border: dashed $chip;
+}
+
+#resident-empty {
+    height: 7;
+    margin: 0 2;
+    padding: 2 5;
+    border: dashed $chip;
+    background: $surface-2;
+    color: $muted;
+}
+
+#available-models-table {
+    height: 1fr;
+}
+
+#model-sidebar {
+    width: 42;
+    min-width: 34;
+    border-left: solid $line;
+    background: $surface;
+}
+
+.sidebar-heading {
+    height: 3;
+    padding: 1 2 0 2;
+    color: $muted;
+    text-style: bold;
+    border-top: solid $line;
+}
+
+#model-sidebar > .sidebar-heading:first-child {
+    border-top: none;
+}
+
+#model-details {
+    height: 16;
+    padding: 0 2;
+    color: $text;
+}
+
+#model-fit-bar {
+    height: 2;
+    margin: 0 2;
+}
+
+#model-fit-bar Bar {
+    &> .bar--bar, &> .bar--complete {
+        color: $green;
+        background: $track;
+    }
+}
+
+#model-fit-detail {
+    height: 3;
+    padding: 0 2;
+    color: $muted;
+}
+
+#model-fit-warning {
+    height: 3;
+    padding: 0 2;
+}
+
+#model-events {
+    height: 1fr;
+    padding: 0 2;
+    color: $text;
+}
+
+Footer {
+    height: 1;
+    background: $surface;
+    color: $muted;
+}
+
+.compact #brand {
+    width: 20;
+    padding-left: 1;
+}
+
+.compact #brand-subtitle,
+.compact .metric-detail {
+    display: none;
+}
+
+.compact .metric-block {
+    min-width: 12;
+    padding: 0 1;
+}
+
+.compact #ollama-status {
+    width: 24;
+    padding: 1;
+}
+
+.compact #model-sidebar {
+    display: none;
+}
+
+.compact #models-main {
+    min-width: 0;
+}
+
+.compact #process-toolbar Button {
+    min-width: 9;
+    padding: 0 1;
+}
+
+.narrow #brand {
+    display: none;
+}
+
+.narrow #ollama-status {
+    width: 20;
 }

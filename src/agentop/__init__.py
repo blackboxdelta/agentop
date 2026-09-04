@@ -1,3 +1,3 @@
 """agentop: local terminal control plane for monitoring/killing agent processes."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

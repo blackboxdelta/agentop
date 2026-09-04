@@ -1,6 +1,6 @@
 [project]
 name = "agentop"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local terminal control plane for monitoring and killing AI agent processes across apps (Copilot CLI, MCP tool servers, Ollama, Claude, ChatGPT/Codex, Cursor)."
 readme = "README.md"
 requires-python = ">=3.10"
