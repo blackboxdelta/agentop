@@ -48,12 +48,14 @@ async def _uncancellable_store_call(function, *args, **kwargs):
     task = asyncio.create_task(
         _safe_store_call(function, *args, **kwargs)
     )
+    cancelled = False
     while not task.done():
         try:
             await asyncio.shield(task)
         except asyncio.CancelledError:
+            cancelled = True
             continue
-    return task.result()
+    return task.result(), cancelled
 
 
 class TerminalFrameParser:
@@ -211,16 +213,32 @@ def create_proxy_app(
             or (request.client.host if request.client else "unknown")
         )
         started_at = time.time()
-        request_id = (
-            await _safe_store_call(
+        begin_cancelled = False
+        if tracked:
+            request_id, begin_cancelled = await _uncancellable_store_call(
                 store.begin_request,
                 model,
                 client_name,
                 started_at,
             )
-            if tracked
-            else None
-        )
+        else:
+            request_id = None
+        if begin_cancelled:
+            if request_id is not None:
+                interrupted = CompletionRecord(
+                    model=model,
+                    client=client_name,
+                    started_at=started_at,
+                    completed_at=time.time(),
+                    success=False,
+                    error_type="interrupted",
+                )
+                await _uncancellable_store_call(
+                    store.finish_request,
+                    request_id,
+                    interrupted,
+                )
+            raise asyncio.CancelledError
         headers = {
             key: value
             for key, value in request.headers.items()

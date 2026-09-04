@@ -401,6 +401,11 @@ async def test_failed_warm_rolls_back_confirmed_evictions(tmp_path, monkeypatch)
     )
     app = AgentopApp(config=config, client=client, store=store)
     app._trigger_refresh = lambda: None
+
+    async def approve_preflight(screen):
+        return True
+
+    app.push_screen_wait = approve_preflight
     monkeypatch.setattr(
         "agentop.ui.app.collect_system_stats",
         lambda: SystemStats(mem_used_gb=30, mem_total_gb=36),
@@ -410,12 +415,7 @@ async def test_failed_warm_rolls_back_confirmed_evictions(tmp_path, monkeypatch)
         app._ollama_status = status
         app._selected_model_name = "target"
         app._update_models_tables(status)
-        app.run_worker(app._warm_selected_model())
-        await pilot.pause()
-        await pilot.click("#preflight-confirm")
-        await _wait_until(
-            lambda: ("warm", "resident", "5m", 4096) in client.calls
-        )
+        await app._warm_selected_model()
 
     assert ("unload", "resident") in client.calls
     assert ("warm", "target", "5m", None) in client.calls
