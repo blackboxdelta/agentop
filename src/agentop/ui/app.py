@@ -40,6 +40,8 @@ from agentop.ollama_client import OllamaClient
 from agentop.ui.screens import ConfirmKillScreen, ConfirmTextScreen, HelpScreen, PreflightScreen
 
 REFRESH_INTERVAL = 2.0
+_WARM_READY_INDENT_MAX = 3
+_WARM_READY_INDENT_INTERVAL_SECONDS = 0.45
 
 _RISK_STYLE = {
     Risk.LOW: "#5EE6A8",
@@ -389,6 +391,8 @@ class AgentopApp(App):
         self._rebuilding_model_tables = False
         self._undo_model: tuple[str, float] | None = None
         self._model_mutation_lock = asyncio.Lock()
+        self._warm_ready_indent = 0
+        self._warm_ready_model_name: str | None = None
 
     def compose(self) -> ComposeResult:
         yield TopBar()
@@ -470,6 +474,10 @@ class AgentopApp(App):
         self.set_class(self.config.no_color, "no-color")
         self._setup_tables()
         self.set_interval(self.refresh_interval, self._trigger_refresh)
+        self.set_interval(
+            _WARM_READY_INDENT_INTERVAL_SECONDS,
+            self._tick_warm_ready_indicator,
+        )
         self.set_interval(3600, self._trigger_store_maintenance)
         self._trigger_store_maintenance()
         self._update_responsive_class(self.size.width)
@@ -735,6 +743,27 @@ class AgentopApp(App):
                 return model, False
         return None, False
 
+    def _warm_button_label(self) -> str:
+        return f"{' ' * self._warm_ready_indent}Warm"
+
+    def _reset_warm_ready_indicator(self) -> None:
+        self._warm_ready_indent = 0
+        self._warm_ready_model_name = None
+
+    def _tick_warm_ready_indicator(self) -> None:
+        if (
+            self._warm_ready_model_name is None
+            or self._warm_ready_indent >= _WARM_READY_INDENT_MAX
+        ):
+            return
+        warm_button = self.query_one("#btn-model-warm", Button)
+        if warm_button.disabled:
+            self._reset_warm_ready_indicator()
+            warm_button.label = "Warm"
+            return
+        self._warm_ready_indent += 1
+        warm_button.label = self._warm_button_label()
+
     def _update_model_details(self) -> None:
         model, resident = self._selected_model()
         details = self.query_one("#model-details", Static)
@@ -753,6 +782,7 @@ class AgentopApp(App):
         pin_button = self.query_one("#btn-model-pin", Button)
         trim_button = self.query_one("#btn-model-trim", Button)
         if model is None:
+            self._reset_warm_ready_indicator()
             details.update("Select a model to inspect it.")
             throughput.update("")
             context_bar.update(progress=0)
@@ -762,6 +792,7 @@ class AgentopApp(App):
             placement_detail.update("")
             reliability.display = reliability_heading.display = False
             sessions.display = sessions_heading.display = False
+            warm_button.label = "Warm"
             for button in (warm_button, unload_button, pin_button, trim_button):
                 button.disabled = True
             return
@@ -907,7 +938,16 @@ class AgentopApp(App):
                 )
             )
 
-        warm_button.disabled = resident
+        if resident:
+            warm_button.disabled = True
+            self._reset_warm_ready_indicator()
+            warm_button.label = "Warm"
+        else:
+            warm_button.disabled = False
+            if self._warm_ready_model_name != model.name:
+                self._warm_ready_model_name = model.name
+                self._warm_ready_indent = 0
+            warm_button.label = self._warm_button_label()
         unload_button.disabled = not resident
         trim_button.disabled = not resident
         pin_button.disabled = False

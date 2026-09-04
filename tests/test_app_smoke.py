@@ -102,6 +102,11 @@ def _fake_agent(
     )
 
 
+def _button_label_text(button: Button) -> str:
+    label = button.label
+    return label.plain if hasattr(label, "plain") else str(label)
+
+
 @pytest.mark.asyncio
 async def test_app_boots_and_populates_tables():
     app = AgentopApp(refresh_interval=100)  # avoid a second auto-refresh mid-test
@@ -343,6 +348,58 @@ async def test_cold_model_preflight_blocks_warm_until_confirmed():
         await pilot.click("#preflight-cancel")
         await pilot.pause()
         assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_warm_button_indent_progresses_for_cold_model_and_resets():
+    app = AgentopApp(refresh_interval=100)
+    app._trigger_refresh = lambda: None
+    async with app.run_test(size=(140, 44)) as pilot:
+        cold_status = OllamaStatus(
+            online=True,
+            available_models=[
+                OllamaAvailableModel(name="cold-a", size_gb=12),
+                OllamaAvailableModel(name="cold-b", size_gb=8),
+            ],
+        )
+        app._ollama_status = cold_status
+        app._update_models_tables(cold_status)
+        app.action_show_tab("tab-models")
+        await pilot.pause()
+
+        warm_button = app.query_one("#btn-model-warm", Button)
+        assert warm_button.disabled is False
+        assert _button_label_text(warm_button) == "Warm"
+
+        for _ in range(8):
+            app._tick_warm_ready_indicator()
+        assert _button_label_text(warm_button) == "   Warm"
+
+        app._selected_model_name = "cold-b"
+        app._update_model_details()
+        assert _button_label_text(warm_button) == "Warm"
+
+        app._tick_warm_ready_indicator()
+        assert _button_label_text(warm_button) == " Warm"
+
+        resident_status = OllamaStatus(
+            online=True,
+            loaded_models=[
+                OllamaModel(
+                    name="cold-b",
+                    size_gb=8,
+                    processor="100% GPU",
+                    memory_gb=8,
+                    gpu_memory_gb=8,
+                    context=4096,
+                )
+            ],
+            available_models=cold_status.available_models,
+        )
+        app._ollama_status = resident_status
+        app._update_models_tables(resident_status)
+        assert warm_button.disabled is True
+        assert _button_label_text(warm_button) == "Warm"
 
 
 @pytest.mark.asyncio
