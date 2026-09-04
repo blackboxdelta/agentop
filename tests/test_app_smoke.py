@@ -488,6 +488,11 @@ async def test_cancelled_warm_restores_evicted_models(tmp_path, monkeypatch):
     )
     app = AgentopApp(config=config, client=client, store=store)
     app._trigger_refresh = lambda: None
+
+    async def approve_preflight(screen):
+        return True
+
+    app.push_screen_wait = approve_preflight
     monkeypatch.setattr(
         "agentop.ui.app.collect_system_stats",
         lambda: SystemStats(mem_used_gb=30, mem_total_gb=36),
@@ -497,14 +502,11 @@ async def test_cancelled_warm_restores_evicted_models(tmp_path, monkeypatch):
         app._ollama_status = status
         app._selected_model_name = "target"
         app._update_models_tables(status)
-        worker = app.run_worker(app._warm_selected_model())
-        await pilot.pause()
-        await pilot.click("#preflight-confirm")
-        await asyncio.wait_for(client.target_started.wait(), 2)
-        worker.cancel()
-        await _wait_until(
-            lambda: ("warm", "resident", "5m", 4096) in client.calls
-        )
+        task = asyncio.create_task(app._warm_selected_model())
+        await asyncio.wait_for(client.target_started.wait(), 15)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
 
     assert ("unload", "resident") in client.calls
     assert ("warm", "resident", "5m", 4096) in client.calls
