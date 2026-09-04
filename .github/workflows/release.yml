@@ -27,7 +27,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: astral-sh/setup-uv@v7
         with:
@@ -39,6 +39,24 @@ jobs:
 
       - name: Test
         run: uv run pytest -q
+
+      - name: Validate macOS installer
+        if: runner.os == 'macOS'
+        shell: bash
+        run: bash -n install.sh
+
+      - name: Validate Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path .\install.ps1),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) { throw ($errors -join "`n") }
 
       - name: Build standalone executable
         run: uv run pyinstaller --clean agentop.spec

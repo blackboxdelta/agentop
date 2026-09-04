@@ -12,6 +12,20 @@ The GitHub workflow runs the complete test suite, builds from the checked-in
 binary with `--version` and `--help`, then packages it with this documentation,
 the example configuration, license, and a SHA-256 checksum.
 
+## Recommended one-line install
+
+macOS Apple Silicon:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/blackboxdelta/agentop/main/install.sh | sh
+```
+
+Windows x64 PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/blackboxdelta/agentop/main/install.ps1 | iex
+```
+
 ## macOS Apple Silicon
 
 ```bash
