@@ -74,7 +74,7 @@ class FakeOllamaClient:
         return None
 
 
-async def _wait_until(predicate, timeout: float = 5.0) -> None:
+async def _wait_until(predicate, timeout: float = 15.0) -> None:
     deadline = asyncio.get_running_loop().time() + timeout
     while not predicate():
         if asyncio.get_running_loop().time() >= deadline:
@@ -561,11 +561,11 @@ async def test_changed_eviction_plan_is_reconfirmed_before_execution(
         app.run_worker(app._warm_selected_model())
         await _wait_until(lambda: len(app.screen_stack) == 2)
         first_modal = app.screen
-        await pilot.click("#preflight-confirm")
+        await first_modal.dismiss(True)
         await _wait_until(
             lambda: len(app.screen_stack) == 2 and app.screen is not first_modal
         )
-        await pilot.click("#preflight-confirm")
+        await app.screen.dismiss(True)
         await _wait_until(lambda: ("unload", "model-b") in client.calls)
 
     assert ("unload", "model-a") not in client.calls

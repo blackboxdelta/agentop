@@ -43,6 +43,19 @@ async def _safe_store_call(function, *args, default=None, **kwargs):
         return default
 
 
+async def _uncancellable_store_call(function, *args, **kwargs):
+    """Finish a bounded SQLite operation before propagating cancellation."""
+    task = asyncio.create_task(
+        _safe_store_call(function, *args, **kwargs)
+    )
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            continue
+    return task.result()
+
+
 class TerminalFrameParser:
     """Incrementally retains only the terminal JSON/SSE frame."""
 
@@ -236,12 +249,10 @@ def create_proxy_app(
                     total_ns=int((completed_at - started_at) * 1e9),
                     error_type="interrupted",
                 )
-                await asyncio.shield(
-                    _safe_store_call(
-                        store.finish_request,
-                        request_id,
-                        record,
-                    )
+                await _uncancellable_store_call(
+                    store.finish_request,
+                    request_id,
+                    record,
                 )
             raise
         except httpx.HTTPError as exc:
@@ -311,12 +322,10 @@ def create_proxy_app(
                     record.success = False
                     record.error_type = stream_error or "interrupted"
                 if request_id is not None:
-                    await asyncio.shield(
-                        _safe_store_call(
-                            store.finish_request,
-                            request_id,
-                            record,
-                        )
+                    await _uncancellable_store_call(
+                        store.finish_request,
+                        request_id,
+                        record,
                     )
 
         return StreamingResponse(

@@ -541,6 +541,8 @@ class AgentopApp(App):
         ollama_status.queue_depth = sum(metric.queue_depth for metric in metrics.values())
         self.query_one(TopBar).update_stats(system_stats, ollama_status, agents)
         await self._update_model_events(ollama_status)
+        if not self.is_running or not self.is_mounted:
+            return
         self._update_overview_table(agents)
         self._update_process_table(agents)
         self._update_models_tables(ollama_status)
