@@ -3,7 +3,7 @@
 See what Ollama is running, understand local LLM performance, and safely
 load or unload models—all from one terminal dashboard.
 
-![agentop Models workspace](docs/images/models.svg)
+![agentop multi-model Playground](docs/images/playground.svg)
 
 ## Install
 
@@ -48,7 +48,7 @@ uv tool install git+https://github.com/blackboxdelta/agentop.git
 | Key | Action |
 |---|---|
 | `1`–`5` | Overview, Processes, Models, Playground, Network |
-| `enter` | Warm model / open compact details |
+| `enter` | Run a Playground prompt / warm a model / open compact details |
 | `k` | Unload model / kill selected process |
 | `shift+k` | Unload all / kill selected category |
 | `p` | Pin or unpin model |
@@ -94,8 +94,11 @@ operational data to a third party.
 
 ## More
 
+- [Playground guide](docs/PLAYGROUND.md)
 - [Configuration and architecture](docs/ARCHITECTURE.md)
 - [Manual installation and release verification](docs/DISTRIBUTION.md)
+- [Models workspace screenshot](docs/images/models.svg)
+- [Compact Playground screenshot](docs/images/playground-compact.svg)
 - [Compact layout screenshot](docs/images/models-compact.svg)
 - [Process overview screenshot](docs/images/overview.svg)
 
@@ -108,5 +111,5 @@ uv sync --group dev
 uv run pytest -q
 ```
 
-The release suite currently includes 100 unit, integration, safety, proxy,
+The release suite includes more than 100 unit, integration, safety, proxy,
 cross-platform, and layout tests.

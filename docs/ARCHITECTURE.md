@@ -5,7 +5,8 @@
 `agentop` has three independent modes:
 
 1. **TUI** — polls Ollama asynchronously, collects host metrics in worker
-   threads, and reads summarized local history.
+   threads, reads summarized local history, and hosts the interactive
+   Playground.
 2. **JSON snapshot** — performs one bounded collection and exits.
 3. **Proxy** — forwards requests only to the configured Ollama host and
    persists completion metadata.
@@ -13,6 +14,25 @@
 The proxy is optional. Without it, completion-derived UI sections are hidden
 or explicitly labeled unavailable; agentop does not manufacture reliability
 or throughput values.
+
+## Playground execution
+
+The Playground uses the configured `OllamaClient` to call `/api/chat` directly;
+the metrics proxy is not required. Requests are non-streaming, so each response
+is added to the transcript after that model finishes.
+
+- Solo mode preserves user and assistant turns for follow-up prompts.
+- Roundtable mode runs two or three models sequentially in A, B, C order.
+- Each roundtable request includes the topic and discussion accumulated so far,
+  allowing later models to respond to earlier participants.
+- Multi-model runs default to 25 rounds and accept 1–100 rounds.
+- The discussion copied into a request is capped at the most recent 24,000
+  characters.
+- Changing the mode or selected models starts a new in-memory conversation.
+- Cancelling a run preserves responses that already completed.
+
+Playground prompt and response bodies remain in process memory. They are not
+written to the event store. The transcript is discarded when AgentOp exits.
 
 ## Polling and stale state
 

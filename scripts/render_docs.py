@@ -3,9 +3,13 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import re
 import tempfile
 import time
 
+from textual.widgets import Input, Label, Select
+
+from agentop.conversation import ConversationEntry
 from agentop.events import EventStore
 from agentop.models import (
     AgentProcess,
@@ -193,34 +197,97 @@ METRICS = {
     ),
 }
 
+DOC_TIMESTAMP = 1_735_689_600.0
+
 EVENTS = [
-    EventRecord(time.time() - 5, "ok", "load", "devstral:latest", "devstral warmed on GPU"),
-    EventRecord(time.time() - 45, "warn", "poll", "", "swap pressure high during load"),
-    EventRecord(time.time() - 90, "ok", "proxy", "devstral:latest", "completion finished in 41.2 s"),
+    EventRecord(DOC_TIMESTAMP - 5, "ok", "load", "devstral:latest", "devstral warmed on GPU"),
+    EventRecord(DOC_TIMESTAMP - 45, "warn", "poll", "", "swap pressure high during load"),
+    EventRecord(DOC_TIMESTAMP - 90, "ok", "proxy", "devstral:latest", "completion finished in 41.2 s"),
 ]
+
+PLAYGROUND_MODELS = (
+    "devstral:latest",
+    "phi4:latest",
+    "qwen2.5-coder:32b",
+)
 
 
 async def render(size: tuple[int, int], tab: str, filename: str) -> None:
-    store = EventStore(Path(tempfile.mkdtemp()) / "events.db")
-    app = AgentopApp(refresh_interval=100, client=StaticClient(), store=store)
-    app._trigger_refresh = lambda: None
-    async with app.run_test(size=size) as pilot:
-        app._agents = AGENTS
-        app._system_stats = SYSTEM
-        app._ollama_status = STATUS
-        app._model_metrics = METRICS
-        app._selected_model_name = "devstral:latest"
-        app.query_one(TopBar).update_stats(SYSTEM, STATUS, AGENTS)
-        app._update_overview_table(AGENTS)
-        app._update_process_table(AGENTS)
-        app._update_models_tables(STATUS)
-        app._update_network_table(
-            [PortInfo(11434, 2401, "ollama", Category.MODEL_SERVER)]
+    with tempfile.TemporaryDirectory() as directory:
+        store = EventStore(Path(directory) / "events.db")
+        app = AgentopApp(refresh_interval=100, client=StaticClient(), store=store)
+        app._trigger_refresh = lambda: None
+        async with app.run_test(size=size) as pilot:
+            app._agents = AGENTS
+            app._system_stats = SYSTEM
+            app._ollama_status = STATUS
+            app._model_metrics = METRICS
+            app._selected_model_name = "devstral:latest"
+            app.query_one(TopBar).update_stats(SYSTEM, STATUS, AGENTS)
+            app._update_overview_table(AGENTS)
+            app._update_process_table(AGENTS)
+            app._update_models_tables(STATUS)
+            app._update_playground_model_options(STATUS)
+            app._update_network_table(
+                [PortInfo(11434, 2401, "ollama", Category.MODEL_SERVER)]
+            )
+            app._render_model_events(EVENTS)
+            app.action_show_tab(tab)
+            if tab == "tab-playground":
+                populate_playground(app, compact=size[0] < 100)
+            await pilot.pause()
+            app.set_focus(None)
+            await pilot.pause()
+            screenshot = Path(
+                app.save_screenshot(filename=filename, path=str(OUTPUT))
+            )
+            normalize_svg(screenshot)
+
+
+def normalize_svg(path: Path) -> None:
+    content = re.sub(r"terminal-\d+", "terminal-agentop", path.read_text())
+    lines = content.splitlines()
+    path.write_text("\n".join(line.rstrip() for line in lines) + "\n")
+
+
+def populate_playground(app: AgentopApp, *, compact: bool) -> None:
+    mode = "duo" if compact else "trio"
+    models = PLAYGROUND_MODELS[: 2 if compact else 3]
+    app.query_one("#playground-mode", Select).value = mode
+    for index, model in enumerate(models, start=1):
+        app.query_one(f"#playground-model-{index}", Select).value = model
+    app.query_one("#playground-rounds", Input).value = "25"
+
+    app._playground_session_key = (mode, *models)
+    app._write_playground_entry(
+        ConversationEntry(
+            "User",
+            "What is the strongest reason to run AI models locally?",
         )
-        app._render_model_events(EVENTS)
-        app.action_show_tab(tab)
-        await pilot.pause()
-        app.save_screenshot(filename=filename, path=str(OUTPUT))
+    )
+    app._write_playground_round_header(1, 25)
+    app._write_playground_entry(
+        ConversationEntry(
+            models[0],
+            "Privacy: prompts and sensitive context can remain on your machine.",
+        )
+    )
+    app._write_playground_entry(
+        ConversationEntry(
+            models[1],
+            "Reliability matters too: local inference works without a network.",
+        )
+    )
+    if not compact:
+        app._write_playground_entry(
+            ConversationEntry(
+                models[2],
+                "Control is the key benefit: you choose the model, version, and data path.",
+            )
+        )
+    app.query_one("#playground-status", Label).update(
+        f"Complete · {len(models)} models · round 1 of 25 shown."
+    )
 
 
 async def main() -> None:
@@ -228,6 +295,8 @@ async def main() -> None:
     await render((160, 52), "tab-overview", "overview.svg")
     await render((160, 52), "tab-models", "models.svg")
     await render((80, 24), "tab-models", "models-compact.svg")
+    await render((160, 52), "tab-playground", "playground.svg")
+    await render((80, 24), "tab-playground", "playground-compact.svg")
 
 
 if __name__ == "__main__":

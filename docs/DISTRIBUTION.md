@@ -76,10 +76,16 @@ agentop --help
    ```bash
    uv sync --group dev --locked
    uv run pytest -q
+   uv run python scripts/render_docs.py
    uv run pyinstaller --clean agentop.spec
    uv run python scripts/verify_binary.py dist/agentop arm64
    ```
 
-3. Push a tag such as `v0.3.0`.
-4. Confirm both GitHub Actions matrix jobs pass and that their checksums match
+   Review the regenerated SVGs in `docs/images/`, including full and compact
+   Playground screenshots. The renderer uses static models, processes, and
+   responses; documentation images must not contain local user data.
+
+3. Commit regenerated documentation assets with the related UI changes.
+4. Push a tag such as `v0.3.0`.
+5. Confirm both GitHub Actions matrix jobs pass and that their checksums match
    the release attachments.
