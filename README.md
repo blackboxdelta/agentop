@@ -36,6 +36,7 @@ uv tool install git+https://github.com/blackboxdelta/agentop.git
 - Live CPU, GPU, unified/VRAM, RAM, swap, and page-in pressure.
 - Resident models with throughput, TTFT, context, placement, and eviction time.
 - Installed models with size, context window, quantization, and run history.
+- A mouse-driven Playground for direct chats and two- or three-model roundtables.
 - Safe warm-up preflight before a model can force evictions or swap paging.
 - Unload with 5-second undo, pinning, context reload, and unload-all confirmation.
 - Local agent-process and port monitoring.
@@ -46,7 +47,7 @@ uv tool install git+https://github.com/blackboxdelta/agentop.git
 
 | Key | Action |
 |---|---|
-| `1`–`4` | Overview, Processes, Models, Network |
+| `1`–`5` | Overview, Processes, Models, Playground, Network |
 | `enter` | Warm model / open compact details |
 | `k` | Unload model / kill selected process |
 | `shift+k` | Unload all / kill selected category |
@@ -60,6 +61,18 @@ uv tool install git+https://github.com/blackboxdelta/agentop.git
 
 Mouse input works for tabs, rows, filters, buttons, confirmations, and
 scrollable panes. The layout adapts from 80×24 through large terminals.
+
+## Run local models
+
+Open the **Playground** tab, choose **Solo**, **2 models**, or **3 models**,
+select installed Ollama models, enter a prompt, and click **Run**. Multi-model
+mode runs the chosen number of rounds in order, with each model receiving the
+discussion so far. **Stop** cancels the active run and keeps partial output;
+**Clear** starts a fresh conversation. Each roundtable participant has a
+distinct labeled response panel (`[A]`, `[B]`, or `[C]`) and color, with a
+visible divider between rounds. Multi-model conversations default to 25 rounds,
+and the rounds field validates the supported 1–100 range before a run starts.
+Press **Enter** from the prompt field as a shortcut for **Run**.
 
 ## Optional request metrics
 

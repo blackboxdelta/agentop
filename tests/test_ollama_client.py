@@ -163,6 +163,62 @@ async def test_model_actions_send_only_to_configured_ollama_host():
 
 
 @pytest.mark.asyncio
+async def test_chat_sends_non_streaming_messages_and_returns_content():
+    received: list[dict] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        received.append(json.loads(request.content))
+        return _json_response(
+            request,
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": " local answer ",
+                },
+                "done": True,
+            },
+        )
+
+    client = OllamaClient(
+        AgentopConfig(host="http://ollama.test"),
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        answer = await client.chat(
+            "model",
+            [{"role": "user", "content": "hello"}],
+        )
+    finally:
+        await client.close()
+
+    assert answer == "local answer"
+    assert received == [
+        {
+            "model": "model",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": False,
+            "keep_alive": "5m",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_chat_rejects_response_without_message_content():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return _json_response(request, {"message": {"role": "assistant"}})
+
+    client = OllamaClient(
+        AgentopConfig(host="http://ollama.test"),
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        with pytest.raises(ValueError, match="no message content"):
+            await client.chat("model", [{"role": "user", "content": "hello"}])
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_tags_failure_keeps_resident_poll_live_and_preserves_metadata():
     fail_tags = False
 

@@ -272,6 +272,32 @@ class OllamaClient:
             long_running=True,
         )
 
+    async def chat(
+        self,
+        model: str,
+        messages: list[dict[str, str]],
+        *,
+        keep_alive: str | int = "5m",
+    ) -> str:
+        payload = await self._json(
+            "POST",
+            "/api/chat",
+            json={
+                "model": model,
+                "messages": messages,
+                "stream": False,
+                "keep_alive": keep_alive,
+            },
+            long_running=True,
+        )
+        message = payload.get("message")
+        if not isinstance(message, dict):
+            raise ValueError("Ollama /api/chat response is missing a message object")
+        content = message.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("Ollama /api/chat response contains no message content")
+        return content.strip()
+
     async def unload_model(self, model: str) -> None:
         await self._json(
             "POST",

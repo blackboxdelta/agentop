@@ -14,9 +14,10 @@ from datetime import datetime, timedelta, timezone
 import psutil
 import pytest
 import sqlite3
-from textual.widgets import Button, DataTable, Input, Label, Static
+from textual.widgets import Button, DataTable, Input, Label, Select, Static
 
 from agentop.config import AgentopConfig
+from agentop.conversation import ConversationEntry
 from agentop.models import (
     AgentProcess,
     Category,
@@ -27,7 +28,7 @@ from agentop.models import (
     SystemStats,
 )
 from agentop.events import EventStore
-from agentop.ui.app import AgentopApp, _fmt_remaining
+from agentop.ui.app import AgentopApp, TopBar, _fmt_remaining
 
 
 @pytest.fixture(autouse=True)
@@ -69,6 +70,10 @@ class FakeOllamaClient:
 
     async def pin_model(self, model, pinned):
         self.calls.append(("pin", model, pinned))
+
+    async def chat(self, model, messages, *, keep_alive="5m"):
+        self.calls.append(("chat", model, messages, keep_alive))
+        return f"response from {model}"
 
     async def close(self):
         return None
@@ -135,11 +140,316 @@ async def test_all_tabs_are_reachable_by_click():
         # not the plain TabPane id) — click the real widget objects rather
         # than guessing the generated id scheme.
         tabs = list(app.query(Tab))
-        assert len(tabs) == 4
+        assert len(tabs) == 5
         for tab in tabs:
             await pilot.click(tab)
             await pilot.pause()
         # No exception means every tab mounted and switched cleanly.
+
+
+@pytest.mark.asyncio
+async def test_playground_runs_solo_and_three_model_roundtable_by_click():
+    models = [
+        OllamaAvailableModel(name="model-a", size_gb=1),
+        OllamaAvailableModel(name="model-b", size_gb=1),
+        OllamaAvailableModel(name="model-c", size_gb=1),
+    ]
+    client = FakeOllamaClient(
+        OllamaStatus(online=True, version="test", available_models=models)
+    )
+    app = AgentopApp(refresh_interval=100, client=client)
+    app._trigger_refresh = lambda: None
+    async with app.run_test(size=(140, 44)) as pilot:
+        await app._do_refresh()
+        app.action_show_tab("tab-playground")
+        await pilot.pause()
+
+        app.query_one("#playground-prompt", Input).value = "hello"
+        await pilot.click("#btn-playground-run")
+        await _wait_until(lambda: len(client.calls) == 1)
+        assert client.calls[0][0:2] == ("chat", "model-a")
+        assert app._playground_entries[-1].content == "response from model-a"
+        await _wait_until(lambda: not app._playground_running)
+
+        app.query_one("#playground-mode", Select).value = "trio"
+        app.query_one("#playground-rounds", Input).value = "2"
+        app.query_one("#playground-prompt", Input).value = "debate this"
+        await pilot.pause()
+        round_headers: list[tuple[int, int]] = []
+        app._write_playground_round_header = (
+            lambda round_number, round_count: round_headers.append(
+                (round_number, round_count)
+            )
+        )
+        await pilot.click("#btn-playground-run")
+        await _wait_until(lambda: len(client.calls) == 7)
+
+        roundtable_calls = client.calls[1:]
+        assert [call[1] for call in roundtable_calls] == [
+            "model-a",
+            "model-b",
+            "model-c",
+            "model-a",
+            "model-b",
+            "model-c",
+        ]
+        assert round_headers == [(1, 2), (2, 2)]
+        assert "response from model-a" in roundtable_calls[1][2][1]["content"]
+
+        await pilot.click("#btn-playground-clear")
+        assert app._playground_entries == []
+        assert app.query_one("#playground-prompt", Input).value == ""
+
+
+@pytest.mark.asyncio
+async def test_playground_guides_setup_and_validates_rounds_immediately():
+    models = [
+        OllamaAvailableModel(name="model-a", size_gb=1),
+        OllamaAvailableModel(name="model-b", size_gb=1),
+        OllamaAvailableModel(name="model-c", size_gb=1),
+    ]
+    app = AgentopApp(
+        refresh_interval=100,
+        client=FakeOllamaClient(
+            OllamaStatus(online=True, version="test", available_models=models)
+        ),
+    )
+    app._trigger_refresh = lambda: None
+    async with app.run_test(size=(120, 30)) as pilot:
+        await app._do_refresh()
+        app.action_show_tab("tab-playground")
+        await pilot.pause()
+
+        prompt = app.query_one("#playground-prompt", Input)
+        run = app.query_one("#btn-playground-run", Button)
+        status = app.query_one("#playground-status", Label)
+        assert prompt.placeholder == "Ask the selected model..."
+        assert "Enter runs one model" in str(status.render())
+
+        app.query_one("#playground-mode", Select).value = "trio"
+        await pilot.pause()
+        assert prompt.placeholder == "Enter a topic for the 3-model roundtable..."
+        assert "3 models respond in order" in str(status.render())
+
+        rounds = app.query_one("#playground-rounds", Input)
+        assert rounds.value == "25"
+
+        rounds.value = "101"
+        await pilot.pause()
+        assert rounds.has_class("invalid")
+        assert run.disabled
+        assert "1 to 100" in str(status.render())
+
+        rounds.value = "100"
+        await pilot.pause()
+        assert not rounds.has_class("invalid")
+        assert not run.disabled
+
+
+@pytest.mark.asyncio
+async def test_playground_differentiates_speakers_and_warns_before_reset():
+    models = [
+        OllamaAvailableModel(name="model-a", size_gb=1),
+        OllamaAvailableModel(name="model-b", size_gb=1),
+        OllamaAvailableModel(name="model-c", size_gb=1),
+    ]
+    app = AgentopApp(
+        refresh_interval=100,
+        client=FakeOllamaClient(
+            OllamaStatus(online=True, version="test", available_models=models)
+        ),
+    )
+    app._trigger_refresh = lambda: None
+    async with app.run_test(size=(120, 30)) as pilot:
+        await app._do_refresh()
+        app.action_show_tab("tab-playground")
+        app._playground_session_key = ("trio", "model-a", "model-b", "model-c")
+        app._playground_transcript_empty = False
+        app._write_playground_entry(ConversationEntry("model-a", "first"))
+        app._write_playground_entry(ConversationEntry("model-b", "second"))
+        app._write_playground_entry(ConversationEntry("model-c", "third"))
+
+        speaker_styles = [
+            app._playground_speaker_style(model)
+            for model in ("model-a", "model-b", "model-c")
+        ]
+        assert len(set(speaker_styles)) == 3
+        panels = [
+            app._playground_entry_panel(ConversationEntry(model, "response"))
+            for model in ("model-a", "model-b", "model-c")
+        ]
+        assert [str(panel.title) for panel in panels] == [
+            "[A]  model-a",
+            "[B]  model-b",
+            "[C]  model-c",
+        ]
+        assert len({str(panel.border_style) for panel in panels}) == 3
+
+        app._playground_entries.append(ConversationEntry("model-a", "first"))
+        app.query_one("#playground-mode", Select).value = "duo"
+        await pilot.pause()
+        assert "Setup changed" in str(
+            app.query_one("#playground-status", Label).render()
+        )
+
+
+@pytest.mark.asyncio
+async def test_narrow_layout_condenses_columns_and_restores_them_on_resize():
+    app = AgentopApp(refresh_interval=100)
+    app._trigger_refresh = lambda: None
+    async with app.run_test(size=(80, 24)) as pilot:
+        process_table = app.query_one("#process-table", DataTable)
+        resident_table = app.query_one("#resident-models-table", DataTable)
+        available_table = app.query_one("#available-models-table", DataTable)
+        network_table = app.query_one("#network-table", DataTable)
+
+        assert [str(column.label) for column in process_table.columns.values()] == [
+            "PID",
+            "Tool",
+            "CPU",
+            "Memory",
+            "Risk",
+        ]
+        assert [str(column.label) for column in resident_table.columns.values()] == [
+            "State",
+            "Model",
+            "Tok/s",
+            "Context",
+            "Evicts",
+        ]
+        assert [str(column.label) for column in available_table.columns.values()] == [
+            "Type",
+            "Model",
+            "Disk",
+            "Est t/s",
+            "Last",
+        ]
+        assert [str(column.label) for column in network_table.columns.values()] == [
+            "Port",
+            "Process",
+            "Category",
+        ]
+        assert available_table.virtual_size.width < 80
+
+        app._system_stats = SystemStats(
+            cpu_percent=18.4,
+            gpu_percent=44.2,
+            gpu_memory_used_gb=10.8,
+            gpu_memory_total_gb=24,
+            gpu_vendor="Apple",
+        )
+        app.query_one(TopBar).update_stats(
+            app._system_stats,
+            OllamaStatus(online=True),
+            [],
+        )
+        assert str(app.query_one("#cpu-value", Label).render()) == "18%"
+        assert str(app.query_one("#gpu-memory-name", Label).render()) == "UMA"
+        assert str(app.query_one("#vram-percent", Label).render()) == "10.8G"
+
+        app.action_show_tab("tab-playground")
+        app.query_one("#playground-mode", Select).value = "trio"
+        await pilot.pause()
+        for selector in (
+            "#playground-mode",
+            "#playground-model-1",
+            "#playground-model-2",
+            "#playground-model-3",
+            "#playground-rounds",
+        ):
+            region = app.query_one(selector).region
+            assert region.x + region.width <= 80
+
+        await pilot.resize_terminal(120, 30)
+        await pilot.pause()
+        assert [str(column.label) for column in process_table.columns.values()] == [
+            "PID",
+            "Category",
+            "Tool",
+            "CPU %",
+            "Memory",
+            "Uptime",
+            "Risk",
+        ]
+        assert str(app.query_one("#gpu-memory-name", Label).render()) == "UNIFIED"
+        assert str(app.query_one("#vram-percent", Label).render()) == "10.8 GB"
+
+
+@pytest.mark.asyncio
+async def test_keybar_tracks_active_workspace_and_terminal_width():
+    app = AgentopApp(refresh_interval=2)
+    app._trigger_refresh = lambda: None
+    async with app.run_test(size=(80, 24)) as pilot:
+        app.action_show_tab("tab-models")
+        await pilot.pause()
+        actions = str(app.query_one("#keybar-actions", Label).render())
+        assert "enter warm" in actions
+        assert "shift+k" not in actions
+        assert app.query_one("#keybar-meta", Label).display is False
+
+        await pilot.resize_terminal(140, 40)
+        await pilot.pause()
+        actions = str(app.query_one("#keybar-actions", Label).render())
+        meta = str(app.query_one("#keybar-meta", Label).render())
+        assert "shift+k unload all" in actions
+        assert "refresh 2 s" in meta
+
+        app.action_show_tab("tab-playground")
+        await pilot.pause()
+        actions = str(app.query_one("#keybar-actions", Label).render())
+        assert "enter run" in actions
+
+
+@pytest.mark.asyncio
+async def test_action_buttons_keep_semantic_colors_and_focus_state():
+    status = OllamaStatus(
+        online=True,
+        available_models=[OllamaAvailableModel(name="model-a", size_gb=1)],
+    )
+    app = AgentopApp(
+        refresh_interval=100,
+        client=FakeOllamaClient(status),
+    )
+    app._trigger_refresh = lambda: None
+    async with app.run_test(size=(140, 40)) as pilot:
+        await app._do_refresh()
+        app.action_show_tab("tab-models")
+        await pilot.pause()
+
+        warm = app.query_one("#btn-model-warm", Button)
+        kill_all = app.query_one("#btn-kill-all", Button)
+        playground_run = app.query_one("#btn-playground-run", Button)
+        assert warm.styles.background.hex == "#5EE6A8"
+        assert warm.styles.color.hex == "#0B0E10"
+        assert kill_all.styles.background.hex == "#F0706E"
+        assert playground_run.styles.background.hex == "#5EE6A8"
+
+        warm.focus()
+        await pilot.pause()
+        assert warm.styles.border_top[1].hex == "#5EE6A8"
+
+
+@pytest.mark.asyncio
+async def test_header_uses_warning_color_only_under_metric_pressure():
+    app = AgentopApp(refresh_interval=100)
+    app._trigger_refresh = lambda: None
+    async with app.run_test(size=(140, 40)):
+        top_bar = app.query_one(TopBar)
+        top_bar.update_stats(
+            SystemStats(mem_percent=60, swap_percent=5, page_in_mb_s=0),
+            OllamaStatus(online=True),
+            [],
+        )
+        assert app.query_one("#memory-percent", Label).has_class("warning") is False
+        assert app.query_one("#swap-percent", Label).has_class("warning") is False
+
+        top_bar.update_stats(
+            SystemStats(mem_percent=90, swap_percent=30, page_in_mb_s=2),
+            OllamaStatus(online=True),
+            [],
+        )
+        assert app.query_one("#memory-percent", Label).has_class("warning") is True
+        assert app.query_one("#swap-percent", Label).has_class("warning") is True
 
 
 @pytest.mark.asyncio

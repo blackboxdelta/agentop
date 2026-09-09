@@ -80,11 +80,15 @@ TopBar {
 }
 
 .metric-value.memory {
-    color: $amber;
+    color: $green;
 }
 
 .metric-value.swap {
-    color: $red;
+    color: $secondary;
+}
+
+.metric-value.warning {
+    color: $amber;
 }
 
 .metric-block ProgressBar {
@@ -119,14 +123,25 @@ TopBar {
 
 #memory-bar Bar {
     &> .bar--bar, &> .bar--complete {
-        color: $amber;
+        color: $green;
         background: $track;
     }
 }
 
 #swap-bar Bar {
     &> .bar--bar, &> .bar--complete {
-        color: $red;
+        color: $secondary;
+        background: $track;
+    }
+}
+
+#cpu-bar.warning Bar,
+#gpu-bar.warning Bar,
+#vram-bar.warning Bar,
+#memory-bar.warning Bar,
+#swap-bar.warning Bar {
+    &> .bar--bar, &> .bar--complete {
+        color: $amber;
         background: $track;
     }
 }
@@ -164,7 +179,7 @@ TopBar {
 }
 
 Tabs {
-    height: 3;
+    height: 2;
     background: $surface;
     border-bottom: solid $line;
 }
@@ -235,6 +250,46 @@ DataTable > .datatable--odd-row {
     min-width: 12;
 }
 
+Button.action-button {
+    background: $surface-2;
+    color: $text;
+    border: tall $chip;
+}
+
+#btn-refresh {
+    color: $blue;
+}
+
+#btn-kill-selected,
+#btn-kill-session,
+#btn-kill-category {
+    color: $amber;
+    border: tall $amber;
+}
+
+#btn-kill-all {
+    background: $red;
+    color: $bg;
+    border: tall $red;
+}
+
+#btn-force-kill {
+    color: $red;
+    border: tall $red;
+}
+
+#btn-force-kill:disabled {
+    color: $glyph;
+    border: tall $chip;
+}
+
+#process-toolbar Button:focus,
+#model-actions Button:focus,
+#playground-compose Button:focus {
+    text-style: bold;
+    border: tall $green;
+}
+
 #models-layout {
     height: 1fr;
 }
@@ -284,10 +339,11 @@ DataTable > .datatable--odd-row {
 #resident-empty {
     height: 7;
     margin: 0 2;
-    padding: 2 5;
+    padding: 0 5;
     border: dashed $chip;
     background: $surface-2;
     color: $muted;
+    content-align: left middle;
 }
 
 #available-models-table {
@@ -295,8 +351,8 @@ DataTable > .datatable--odd-row {
 }
 
 #model-sidebar {
-    width: 42;
-    min-width: 34;
+    width: 44;
+    min-width: 38;
     border-left: solid $line;
     background: $surface;
 }
@@ -321,7 +377,7 @@ DataTable > .datatable--odd-row {
 
 #model-actions {
     height: 3;
-    padding: 0 2;
+    padding: 0 1;
 }
 
 #model-actions Button {
@@ -331,13 +387,31 @@ DataTable > .datatable--odd-row {
 }
 
 #btn-model-warm {
+    width: 9;
     background: $green;
     color: $bg;
+    border: tall $green;
 }
 
 #btn-model-unload {
-    background: $red;
-    color: $bg;
+    width: 9;
+    color: $red;
+    border: tall $red;
+}
+
+#btn-model-pin {
+    width: 7;
+}
+
+#btn-model-trim {
+    width: 10;
+}
+
+#btn-model-warm:disabled,
+#btn-model-unload:disabled {
+    background: $surface-2;
+    color: $glyph;
+    border: tall $chip;
 }
 
 #throughput-detail,
@@ -387,10 +461,128 @@ DataTable > .datatable--odd-row {
     color: $text;
 }
 
-Footer {
+#playground-layout {
+    height: 1fr;
+    background: $bg;
+}
+
+#playground-settings {
+    height: 4;
+    padding: 0 1;
+    background: $surface;
+    border-bottom: solid $line;
+}
+
+.playground-picker {
+    width: 1fr;
+    min-width: 14;
+    height: 4;
+    padding: 0 1;
+}
+
+.playground-rounds {
+    width: 10;
+    min-width: 10;
+}
+
+.playground-label {
+    height: 1;
+    color: $muted;
+    text-style: bold;
+}
+
+.playground-picker Select,
+.playground-picker Input {
+    width: 1fr;
+    height: 3;
+    border: tall $chip;
+    background: $surface-2;
+}
+
+.playground-picker Select:focus,
+.playground-picker Input:focus {
+    border: tall $green;
+}
+
+.playground-picker Input.invalid {
+    border: tall $red;
+    color: $red;
+}
+
+#playground-transcript {
+    height: 1fr;
+    padding: 1 2;
+    background: $bg;
+    color: $text;
+}
+
+#playground-status {
+    height: 1;
+    padding: 0 2;
+    color: $muted;
+    background: $surface-2;
+}
+
+#playground-compose {
+    height: 3;
+    padding: 0 1;
+    background: $surface;
+    border-top: solid $line;
+}
+
+#playground-prompt {
+    width: 1fr;
+    height: 3;
+    border: tall $chip;
+    background: $surface-2;
+}
+
+#playground-prompt:focus {
+    border: tall $green;
+}
+
+#playground-compose Button {
+    width: 10;
+    min-width: 8;
+    height: 3;
+    margin-left: 1;
+}
+
+#btn-playground-run {
+    background: $green;
+    color: $bg;
+    border: tall $green;
+}
+
+#btn-playground-stop {
+    color: $red;
+    border: tall $red;
+}
+
+#btn-playground-run:disabled,
+#btn-playground-stop:disabled {
+    background: $surface-2;
+    color: $glyph;
+    border: tall $chip;
+}
+
+KeyBar {
     height: 1;
     background: $surface;
     color: $muted;
+}
+
+#keybar-actions {
+    width: 1fr;
+    padding: 0 1;
+    color: $text;
+}
+
+#keybar-meta {
+    width: auto;
+    padding: 0 1;
+    color: $muted;
+    text-align: right;
 }
 
 .compact #brand {
@@ -434,7 +626,31 @@ Footer {
 .compact #resident-empty {
     height: 3;
     margin: 0 1;
-    padding: 1 2;
+    padding: 0 2;
+}
+
+.compact #playground-settings {
+    height: 3;
+    padding: 0 1;
+}
+
+.compact .playground-picker {
+    height: 3;
+    min-width: 12;
+    padding: 0;
+}
+
+.compact .playground-label {
+    display: none;
+}
+
+.compact .playground-rounds {
+    width: 8;
+    min-width: 8;
+}
+
+.compact #playground-transcript {
+    padding: 0 1;
 }
 
 .compact.detail-open #models-main {
@@ -470,6 +686,10 @@ Footer {
 .narrow #process-toolbar Button {
     width: 1fr;
     margin: 0;
+}
+
+.narrow #keybar-meta {
+    display: none;
 }
 
 .no-color * {

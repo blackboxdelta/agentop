@@ -8,18 +8,36 @@ import sqlite3
 import time
 
 from rich.markup import escape
+from rich.panel import Panel
+from rich.rule import Rule
 from rich.text import Text
 import httpx
 from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, HorizontalScroll, Vertical, VerticalScroll
-from textual.widgets import Button, DataTable, Footer, Input, Label, ProgressBar, Static, TabbedContent, TabPane
+from textual.widgets import (
+    Button,
+    DataTable,
+    Input,
+    Label,
+    ProgressBar,
+    RichLog,
+    Select,
+    Static,
+    TabbedContent,
+    TabPane,
+)
 
 from agentop.collectors.network import collect_listening_ports
 from agentop.collectors.processes import collect_agent_processes
 from agentop.collectors.system import collect_system_stats
 from agentop.config import AgentopConfig, normalize_host
+from agentop.conversation import (
+    ConversationEntry,
+    build_roundtable_messages,
+    build_solo_messages,
+)
 from agentop.control import KillScope, build_kill_plan, execute_kill
 from agentop.events import EventStore
 from agentop.fit import FitPlan, calculate_fit_plan
@@ -56,12 +74,99 @@ _EVENT_STYLE = {
     "warn": "#E0A65C",
 }
 
+_PLAYGROUND_MODE_COUNTS = {"solo": 1, "duo": 2, "trio": 3}
+_PLAYGROUND_MODEL_STYLES = ("#8FA9FF", "#C9A6FF", "#E0A65C")
+_PLAYGROUND_PROMPTS = {
+    "solo": "Ask the selected model...",
+    "duo": "Enter a topic for the 2-model roundtable...",
+    "trio": "Enter a topic for the 3-model roundtable...",
+}
+
 _MODEL_KIND_STYLE = {
     "GGUF": "bold #8FA9FF on #171F33",
     "CODE": "bold #5EE6A8 on #0F2620",
     "CHAT": "bold #C9A6FF on #1E1830",
     "VLM": "bold #E0A65C on #2A1F12",
     "LLM": "#8A98A0 on #232A2E",
+}
+
+_TABLE_COLUMNS = {
+    "overview-table": (
+        ("Category", "category", None),
+        ("Count", "count", None),
+        ("CPU %", "cpu", None),
+        ("Memory", "memory", None),
+        ("Risk", "risk", None),
+    ),
+    "process-table": (
+        ("PID", "pid", None),
+        ("Category", "category", None),
+        ("Tool", "tool", None),
+        ("CPU %", "cpu", None),
+        ("Memory", "memory", None),
+        ("Uptime", "uptime", None),
+        ("Risk", "risk", None),
+    ),
+    "resident-models-table": (
+        ("State", "state", None),
+        ("Model", "model", None),
+        ("Tok/s", "tokens", None),
+        ("TTFT", "ttft", None),
+        ("Context", "context", None),
+        ("Layers", "layers", None),
+        ("Evicts in", "expiry", None),
+    ),
+    "available-models-table": (
+        ("Type", "type", None),
+        ("Model", "model", None),
+        ("Disk", "disk", None),
+        ("Max ctx", "context", None),
+        ("Est tok/s", "tokens", None),
+        ("Last run", "last-run", None),
+        ("Runs", "runs", None),
+    ),
+    "network-table": (
+        ("Port", "port", None),
+        ("PID", "pid", None),
+        ("Process", "process", None),
+        ("Category", "category", None),
+    ),
+}
+
+_NARROW_TABLE_COLUMNS = {
+    "overview-table": (
+        ("Category", "category", 22),
+        ("#", "count", 4),
+        ("CPU", "cpu", 7),
+        ("Memory", "memory", 10),
+        ("Risk", "risk", 7),
+    ),
+    "process-table": (
+        ("PID", "pid", 7),
+        ("Tool", "tool", 20),
+        ("CPU", "cpu", 7),
+        ("Memory", "memory", 10),
+        ("Risk", "risk", 7),
+    ),
+    "resident-models-table": (
+        ("State", "state", 12),
+        ("Model", "model", 23),
+        ("Tok/s", "tokens", 8),
+        ("Context", "context", 10),
+        ("Evicts", "expiry", 8),
+    ),
+    "available-models-table": (
+        ("Type", "type", 6),
+        ("Model", "model", 27),
+        ("Disk", "disk", 9),
+        ("Est t/s", "tokens", 9),
+        ("Last", "last-run", 9),
+    ),
+    "network-table": (
+        ("Port", "port", 7),
+        ("Process", "process", 24),
+        ("Category", "category", 22),
+    ),
 }
 
 
@@ -249,8 +354,14 @@ class TopBar(Static):
         ollama: OllamaStatus,
         agents: list[AgentProcess],
     ) -> None:
+        narrow = self.app.has_class("narrow")
         self.query_one("#cpu-bar", ProgressBar).update(progress=stats.cpu_percent)
-        self.query_one("#cpu-value", Label).update(f"{stats.cpu_percent:.1f}%")
+        self.query_one("#cpu-value", Label).update(
+            f"{stats.cpu_percent:.0f}%"
+            if narrow
+            else f"{stats.cpu_percent:.1f}%"
+        )
+        self._set_pressure_state("cpu", stats.cpu_percent >= 90)
         self.query_one("#cpu-detail", Label).update(
             f"{stats.cpu_count} cores · load {stats.load_1m:.1f}"
         )
@@ -259,7 +370,13 @@ class TopBar(Static):
             progress=stats.gpu_percent or 0.0
         )
         self.query_one("#gpu-value", Label).update(
-            f"{stats.gpu_percent:.1f}%" if stats.gpu_percent is not None else "N/A"
+            (
+                f"{stats.gpu_percent:.0f}%"
+                if narrow
+                else f"{stats.gpu_percent:.1f}%"
+            )
+            if stats.gpu_percent is not None
+            else "N/A"
         )
         gpu_details = []
         if stats.gpu_temperature_c is not None:
@@ -269,12 +386,17 @@ class TopBar(Static):
         self.query_one("#gpu-detail", Label).update(
             " · ".join(gpu_details) or stats.gpu_vendor or "unavailable"
         )
+        self._set_pressure_state(
+            "gpu",
+            stats.gpu_temperature_c is not None
+            and stats.gpu_temperature_c >= 85,
+        )
 
         vram_used = stats.gpu_memory_used_gb
         vram_total = stats.gpu_memory_total_gb
         apple_unified = stats.gpu_vendor == "Apple"
         self.query_one("#gpu-memory-name", Label).update(
-            "UNIFIED" if apple_unified else "VRAM"
+            "UMA" if apple_unified and narrow else "UNIFIED" if apple_unified else "VRAM"
         )
         vram_percent = (
             vram_used / vram_total * 100
@@ -282,13 +404,21 @@ class TopBar(Static):
             else None
         )
         self.query_one("#vram-percent", Label).update(
-            f"{vram_used:.1f} GB"
+            f"{vram_used:.1f}G"
+            if narrow and apple_unified and vram_used is not None
+            else f"{vram_used:.1f} GB"
             if apple_unified and vram_used is not None
+            else f"{vram_percent:.0f}%"
+            if narrow and vram_percent is not None
             else f"{vram_percent:.1f}%"
             if vram_percent is not None
             else "N/A"
         )
         self.query_one("#vram-bar", ProgressBar).update(progress=vram_percent or 0)
+        self._set_pressure_state(
+            "vram",
+            vram_percent is not None and vram_percent >= 90,
+        )
         self.query_one("#vram-detail", Label).update(
             f"{vram_used:.1f} / {vram_total:.1f} GB"
             if vram_used is not None and vram_total is not None
@@ -297,14 +427,31 @@ class TopBar(Static):
             else "not exposed"
         )
 
-        self.query_one("#memory-percent", Label).update(f"{stats.mem_percent:.1f}%")
+        self.query_one("#memory-percent", Label).update(
+            f"{stats.mem_percent:.0f}%"
+            if narrow
+            else f"{stats.mem_percent:.1f}%"
+        )
         self.query_one("#memory-bar", ProgressBar).update(progress=stats.mem_percent)
+        self._set_pressure_state("memory", stats.mem_percent >= 85)
         self.query_one("#memory-detail", Label).update(
             f"{stats.mem_used_gb:.1f} / {stats.mem_total_gb:.1f} GB"
         )
 
-        self.query_one("#swap-percent", Label).update(f"{stats.swap_percent:.1f}%")
+        self.query_one("#swap-percent", Label).update(
+            f"{stats.swap_percent:.0f}%"
+            if narrow
+            else f"{stats.swap_percent:.1f}%"
+        )
         self.query_one("#swap-bar", ProgressBar).update(progress=stats.swap_percent)
+        self._set_pressure_state(
+            "swap",
+            stats.swap_percent >= 25
+            or (
+                stats.page_in_mb_s is not None
+                and stats.page_in_mb_s >= 1
+            ),
+        )
         self.query_one("#swap-detail", Label).update(
             f"{stats.page_in_mb_s:.1f} MB/s page-in"
             if stats.page_in_mb_s is not None
@@ -331,6 +478,74 @@ class TopBar(Static):
         )
         self.query_one("#ollama-detail", Label).update(detail)
 
+    def _set_pressure_state(self, metric: str, warning: bool) -> None:
+        value_id = {
+            "cpu": "cpu-value",
+            "gpu": "gpu-value",
+            "vram": "vram-percent",
+            "memory": "memory-percent",
+            "swap": "swap-percent",
+        }[metric]
+        self.query_one(f"#{value_id}", Label).set_class(warning, "warning")
+        self.query_one(f"#{metric}-bar", ProgressBar).set_class(warning, "warning")
+
+
+class KeyBar(Static):
+    """Contextual shortcuts that stay concise at narrow terminal widths."""
+
+    def compose(self) -> ComposeResult:
+        with Horizontal():
+            yield Label("", id="keybar-actions")
+            yield Label("", id="keybar-meta")
+
+    def update_context(
+        self,
+        tab_id: str,
+        *,
+        width: int,
+        refresh_interval: float,
+    ) -> None:
+        compact = width < 130
+        if tab_id == "tab-models":
+            actions = (
+                "[#5EE6A8]enter[/#5EE6A8] warm  "
+                "[#F0706E]k[/#F0706E] unload  "
+                "[#8FA9FF]/[/#8FA9FF] filter  "
+                "[#8A98A0]?[/#8A98A0] help  q quit"
+                if compact
+                else "[#5EE6A8]enter[/#5EE6A8] warm  "
+                "[#F0706E]k[/#F0706E] unload  shift+k unload all  "
+                "t trim ctx  p pin  [#8FA9FF]/[/#8FA9FF] filter  r refresh  q quit"
+            )
+        elif tab_id == "tab-processes":
+            actions = (
+                "j/k move  [#F0706E]k[/#F0706E] kill  "
+                "shift+a kill all  [#8A98A0]?[/#8A98A0] help  q quit"
+                if compact
+                else "j/k move  [#F0706E]k[/#F0706E] kill selected  "
+                "shift+s session  shift+k category  shift+a kill all  "
+                "r refresh  q quit"
+            )
+        elif tab_id == "tab-playground":
+            actions = (
+                "[#5EE6A8]enter[/#5EE6A8] run  click mode/models  stop/clear  q quit"
+                if compact
+                else "[#5EE6A8]enter[/#5EE6A8] run  select solo / 2 / 3 models  "
+                "click stop/clear  "
+                "5 network  q quit"
+            )
+        else:
+            actions = (
+                "j/k move  r refresh  [#8A98A0]?[/#8A98A0] help  q quit"
+                if compact
+                else "j/k move  1 overview  2 processes  3 models  4 playground  5 network  "
+                "r refresh  q quit"
+            )
+        self.query_one("#keybar-actions", Label).update(actions)
+        self.query_one("#keybar-meta", Label).update(
+            f"window 60 s · refresh {refresh_interval:g} s · ? help"
+        )
+
 
 class AgentopApp(App):
     """Local terminal control plane for agent processes and models."""
@@ -342,7 +557,8 @@ class AgentopApp(App):
         Binding("1", "show_tab('tab-overview')", "Overview"),
         Binding("2", "show_tab('tab-processes')", "Processes"),
         Binding("3", "show_tab('tab-models')", "Models"),
-        Binding("4", "show_tab('tab-network')", "Network"),
+        Binding("4", "show_tab('tab-playground')", "Playground"),
+        Binding("5", "show_tab('tab-network')", "Network"),
         Binding("/", "focus_model_filter", "Filter Models"),
         Binding("r", "refresh_now", "Refresh"),
         Binding("enter", "model_warm", "Warm"),
@@ -350,7 +566,7 @@ class AgentopApp(App):
         Binding("shift+s", "kill_switch_session", "Kill Session"),
         Binding("shift+k", "context_kill_all", "Unload All / Kill Category"),
         Binding("shift+a", "kill_switch_all", "KILL ALL"),
-        Binding("t", "trim_context", "Reload Context"),
+        Binding("t", "trim_context", "Trim Context"),
         Binding("p", "toggle_pin", "Pin"),
         Binding("u", "undo_unload", "Undo Unload"),
         Binding("?", "show_help", "Help"),
@@ -377,6 +593,7 @@ class AgentopApp(App):
         self.client = client or OllamaClient(self.config)
         self._owns_client = client is None
         self._agents: list[AgentProcess] = []
+        self._ports: list[PortInfo] = []
         self._system_stats = SystemStats()
         self._ollama_status = OllamaStatus(online=False)
         self._selected_agent: AgentProcess | None = None
@@ -393,6 +610,14 @@ class AgentopApp(App):
         self._model_mutation_lock = asyncio.Lock()
         self._warm_ready_indent = 0
         self._warm_ready_model_name: str | None = None
+        self._table_layout_mode = ""
+        self._tables_configured = False
+        self._playground_entries: list[ConversationEntry] = []
+        self._playground_session_key: tuple[str, ...] | None = None
+        self._playground_model_options: tuple[str, ...] = ()
+        self._playground_worker = None
+        self._playground_running = False
+        self._playground_transcript_empty = True
 
     def compose(self) -> ComposeResult:
         yield TopBar()
@@ -402,14 +627,35 @@ class AgentopApp(App):
             with TabPane("2  Processes", id="tab-processes"):
                 yield DataTable(id="process-table", cursor_type="row", zebra_stripes=True)
                 with HorizontalScroll(id="process-toolbar"):
-                    yield Button("Refresh", id="btn-refresh")
-                    yield Button("Kill Selected", id="btn-kill-selected", variant="warning")
-                    yield Button("Kill Session", id="btn-kill-session", variant="warning")
-                    yield Button("Kill Category", id="btn-kill-category", variant="error")
-                    yield Button("KILL ALL", id="btn-kill-all", variant="error")
+                    yield Button("Refresh", id="btn-refresh", classes="action-button")
+                    yield Button(
+                        "Kill Selected",
+                        id="btn-kill-selected",
+                        classes="action-button",
+                        variant="warning",
+                    )
+                    yield Button(
+                        "Kill Session",
+                        id="btn-kill-session",
+                        classes="action-button",
+                        variant="warning",
+                    )
+                    yield Button(
+                        "Kill Category",
+                        id="btn-kill-category",
+                        classes="action-button",
+                        variant="error",
+                    )
+                    yield Button(
+                        "KILL ALL",
+                        id="btn-kill-all",
+                        classes="action-button",
+                        variant="error",
+                    )
                     yield Button(
                         "Force Kill Remaining (0)",
                         id="btn-force-kill",
+                        classes="action-button",
                         variant="error",
                         disabled=True,
                     )
@@ -426,20 +672,38 @@ class AgentopApp(App):
                         yield Label("RESIDENT  0 models · 0.0 GB held", id="resident-heading", classes="section-heading")
                         yield DataTable(id="resident-models-table", cursor_type="row", zebra_stripes=True)
                         yield Static(
-                            "[#252E33]Ø[/#252E33]  [bold #8A98A0]No models resident in memory.[/bold #8A98A0]\n"
-                            "[#5C6A72]Models appear here while Ollama keeps them loaded.[/#5C6A72]",
+                            "[#252E33]○[/#252E33]  [bold #8A98A0]No models resident[/bold #8A98A0]"
+                            "[#5C6A72] · select a cold model below, then press enter to warm[/#5C6A72]",
                             id="resident-empty",
                         )
                         yield Label("AVAILABLE  0 models · 0.0 GB on disk", id="available-heading", classes="section-heading")
                         yield DataTable(id="available-models-table", cursor_type="row", zebra_stripes=True)
                     with VerticalScroll(id="model-sidebar"):
-                        yield Label("SELECTED", classes="sidebar-heading")
+                        yield Label("SELECTED", id="selected-heading", classes="sidebar-heading")
                         yield Static("Select a model to inspect it.", id="model-details")
                         with Horizontal(id="model-actions"):
-                            yield Button("Warm", id="btn-model-warm", variant="primary")
-                            yield Button("Unload", id="btn-model-unload", variant="error")
-                            yield Button("Pin", id="btn-model-pin")
-                            yield Button("Reload ctx", id="btn-model-trim")
+                            yield Button(
+                                "Warm",
+                                id="btn-model-warm",
+                                classes="action-button",
+                                variant="primary",
+                            )
+                            yield Button(
+                                "Unload",
+                                id="btn-model-unload",
+                                classes="action-button",
+                                variant="error",
+                            )
+                            yield Button(
+                                "Pin",
+                                id="btn-model-pin",
+                                classes="action-button",
+                            )
+                            yield Button(
+                                "Trim ctx",
+                                id="btn-model-trim",
+                                classes="action-button",
+                            )
                         yield Label("THROUGHPUT · 60 s", id="throughput-heading", classes="sidebar-heading")
                         yield Static("", id="throughput-detail")
                         yield Label("CONTEXT & KV CACHE", id="context-heading", classes="sidebar-heading")
@@ -465,14 +729,116 @@ class AgentopApp(App):
                         yield Static("", id="sessions-detail")
                         yield Label("RECENT EVENTS", classes="sidebar-heading")
                         yield Static("Waiting for model activity.", id="model-events")
-            with TabPane("4  Network", id="tab-network"):
+            with TabPane("4  Playground", id="tab-playground"):
+                with Vertical(id="playground-layout"):
+                    with Horizontal(id="playground-settings"):
+                        with Vertical(classes="playground-picker"):
+                            yield Label("MODE", classes="playground-label")
+                            yield Select(
+                                (
+                                    ("Solo", "solo"),
+                                    ("2 models", "duo"),
+                                    ("3 models", "trio"),
+                                ),
+                                value="solo",
+                                allow_blank=False,
+                                compact=True,
+                                id="playground-mode",
+                            )
+                        with Vertical(
+                            id="playground-model-1-wrap",
+                            classes="playground-picker",
+                        ):
+                            yield Label("MODEL 1", classes="playground-label")
+                            yield Select(
+                                (),
+                                prompt="No models found",
+                                compact=True,
+                                disabled=True,
+                                id="playground-model-1",
+                            )
+                        with Vertical(
+                            id="playground-model-2-wrap",
+                            classes="playground-picker",
+                        ):
+                            yield Label("MODEL 2", classes="playground-label")
+                            yield Select(
+                                (),
+                                prompt="No models found",
+                                compact=True,
+                                disabled=True,
+                                id="playground-model-2",
+                            )
+                        with Vertical(
+                            id="playground-model-3-wrap",
+                            classes="playground-picker",
+                        ):
+                            yield Label("MODEL 3", classes="playground-label")
+                            yield Select(
+                                (),
+                                prompt="No models found",
+                                compact=True,
+                                disabled=True,
+                                id="playground-model-3",
+                            )
+                        with Vertical(
+                            id="playground-rounds-wrap",
+                            classes="playground-picker playground-rounds",
+                        ):
+                            yield Label("ROUNDS", classes="playground-label")
+                            yield Input(
+                                value="25",
+                                type="integer",
+                                max_length=3,
+                                compact=True,
+                                id="playground-rounds",
+                            )
+                    yield RichLog(
+                        min_width=1,
+                        wrap=True,
+                        auto_scroll=True,
+                        id="playground-transcript",
+                    )
+                    yield Label(
+                        "Ready · choose a mode and local model.",
+                        id="playground-status",
+                    )
+                    with Horizontal(id="playground-compose"):
+                        yield Input(
+                            placeholder=_PLAYGROUND_PROMPTS["solo"],
+                            id="playground-prompt",
+                            compact=True,
+                        )
+                        yield Button(
+                            "Run",
+                            id="btn-playground-run",
+                            classes="action-button",
+                            variant="primary",
+                            disabled=True,
+                        )
+                        yield Button(
+                            "Stop",
+                            id="btn-playground-stop",
+                            classes="action-button",
+                            variant="error",
+                            disabled=True,
+                        )
+                        yield Button(
+                            "Clear",
+                            id="btn-playground-clear",
+                            classes="action-button",
+                        )
+            with TabPane("5  Network", id="tab-network"):
                 yield DataTable(id="network-table", cursor_type="row", zebra_stripes=True)
-        yield Footer()
+        yield KeyBar()
 
     def on_mount(self) -> None:
         self.store.initialize()
         self.set_class(self.config.no_color, "no-color")
+        self._update_responsive_class(self.size.width)
         self._setup_tables()
+        self._show_playground_empty_state()
+        self._update_playground_mode_controls()
         self.set_interval(self.refresh_interval, self._trigger_refresh)
         self.set_interval(
             _WARM_READY_INDENT_INTERVAL_SECONDS,
@@ -480,10 +846,11 @@ class AgentopApp(App):
         )
         self.set_interval(3600, self._trigger_store_maintenance)
         self._trigger_store_maintenance()
-        self._update_responsive_class(self.size.width)
         self.call_after_refresh(self._trigger_refresh)
 
     async def on_unmount(self) -> None:
+        if self._playground_worker is not None:
+            self._playground_worker.cancel()
         if self._owns_client:
             await self.client.close()
 
@@ -493,23 +860,62 @@ class AgentopApp(App):
     def _update_responsive_class(self, width: int) -> None:
         self.set_class(width <= 120, "compact")
         self.set_class(width < 90, "narrow")
+        layout_mode = "narrow" if width < 90 else "standard"
+        mode_changed = layout_mode != self._table_layout_mode
+        self._table_layout_mode = layout_mode
+        headings = list(self.query("#selected-heading"))
+        if headings:
+            headings[0].update(
+                "SELECTED  ·  esc back" if width <= 120 else "SELECTED"
+            )
+        top_bars = list(self.query(TopBar))
+        if mode_changed and top_bars:
+            top_bars[0].update_stats(
+                self._system_stats,
+                self._ollama_status,
+                self._agents,
+            )
+        self._update_key_bar(width=width)
+        if mode_changed and self._tables_configured:
+            self._setup_tables()
+            self._render_all_tables()
+
+    def _update_key_bar(
+        self,
+        tab_id: str | None = None,
+        *,
+        width: int | None = None,
+    ) -> None:
+        key_bars = list(self.query(KeyBar))
+        if not key_bars:
+            return
+        if tab_id is None:
+            tabs = list(self.query("#main-tabs"))
+            tab_id = tabs[0].active if tabs else "tab-overview"
+        key_bars[0].update_context(
+            tab_id,
+            width=self.size.width if width is None else width,
+            refresh_interval=self.refresh_interval,
+        )
 
     def _setup_tables(self) -> None:
-        self.query_one("#overview-table", DataTable).add_columns(
-            "Category", "Count", "CPU %", "Memory", "Risk"
+        schemas = (
+            _NARROW_TABLE_COLUMNS
+            if self._table_layout_mode == "narrow"
+            else _TABLE_COLUMNS
         )
-        self.query_one("#process-table", DataTable).add_columns(
-            "PID", "Category", "Tool", "CPU %", "Memory", "Uptime", "Risk"
-        )
-        self.query_one("#resident-models-table", DataTable).add_columns(
-            "State", "Model", "Tok/s", "TTFT", "Context", "Layers", "Evicts in"
-        )
-        self.query_one("#available-models-table", DataTable).add_columns(
-            "Type", "Model", "Disk", "Max ctx", "Est tok/s", "Last run", "Runs"
-        )
-        self.query_one("#network-table", DataTable).add_columns(
-            "Port", "PID", "Process", "Category"
-        )
+        for table_id, columns in schemas.items():
+            table = self.query_one(f"#{table_id}", DataTable)
+            table.clear(columns=True)
+            for label, key, width in columns:
+                table.add_column(label, key=key, width=width)
+        self._tables_configured = True
+
+    def _render_all_tables(self) -> None:
+        self._update_overview_table(self._agents)
+        self._update_process_table(self._agents)
+        self._update_models_tables(self._ollama_status)
+        self._update_network_table(self._ports)
 
     def _trigger_refresh(self) -> None:
         self.refresh_data()
@@ -541,8 +947,10 @@ class AgentopApp(App):
         if not self.is_running or not self.is_mounted:
             return
         self._agents = agents
+        self._ports = ports
         self._system_stats = system_stats
         self._ollama_status = ollama_status
+        self._update_playground_model_options(ollama_status)
         self._model_metrics = metrics
         self._pinned_models = pins
         ollama_status.in_flight = sum(metric.in_flight for metric in metrics.values())
@@ -568,7 +976,7 @@ class AgentopApp(App):
             table.add_row(
                 category.value,
                 str(len(processes)),
-                f"{sum(process.cpu_percent for process in processes):.1f}",
+                f"{sum(process.cpu_percent for process in processes):.1f}%",
                 _fmt_mem(sum(process.mem_mb for process in processes)),
                 _risk_text(highest_risk),
                 key=category.value,
@@ -578,16 +986,18 @@ class AgentopApp(App):
         table = self.query_one("#process-table", DataTable)
         table.clear()
         for agent in sorted(agents, key=lambda process: -process.cpu_percent):
-            table.add_row(
+            values = (
                 str(agent.pid),
                 agent.category.value,
                 agent.subtype,
-                f"{agent.cpu_percent:.1f}",
+                f"{agent.cpu_percent:.1f}%",
                 _fmt_mem(agent.mem_mb),
                 _fmt_uptime(agent.uptime_seconds),
                 _risk_text(agent.risk),
-                key=str(agent.pid),
             )
+            if self._table_layout_mode == "narrow":
+                values = (values[0], values[2], values[3], values[4], values[6])
+            table.add_row(*values, key=str(agent.pid))
 
     def _filtered_available_models(self) -> list[OllamaAvailableModel]:
         query = self._model_filter.casefold()
@@ -646,7 +1056,7 @@ class AgentopApp(App):
                     )
                 else:
                     layers = model.processor
-                resident.add_row(
+                values = (
                     state,
                     model.name,
                     _fmt_rate(metrics.generation_tps),
@@ -658,8 +1068,16 @@ class AgentopApp(App):
                     context,
                     layers,
                     _fmt_remaining(model.expires_at),
-                    key=model.name,
                 )
+                if self._table_layout_mode == "narrow":
+                    values = (
+                        values[0],
+                        values[1],
+                        values[2],
+                        values[4],
+                        values[6],
+                    )
+                resident.add_row(*values, key=model.name)
             total_memory = sum(model.memory_gb for model in ollama.loaded_models)
             self.query_one("#resident-heading", Label).update(
                 f"RESIDENT  {len(ollama.loaded_models)} models · {total_memory:.1f} GB held"
@@ -675,7 +1093,7 @@ class AgentopApp(App):
                 metrics = self._model_metrics.get(
                     model.name, ModelMetrics(model=model.name)
                 )
-                available.add_row(
+                values = (
                     _model_kind_text(model),
                     model.name,
                     f"{model.size_gb:.1f} GB",
@@ -691,8 +1109,16 @@ class AgentopApp(App):
                         else "-"
                     ),
                     str(metrics.run_count),
-                    key=model.name,
                 )
+                if self._table_layout_mode == "narrow":
+                    values = (
+                        values[0],
+                        values[1],
+                        values[2],
+                        values[4],
+                        values[5],
+                    )
+                available.add_row(*values, key=model.name)
         finally:
             self._rebuilding_model_tables = False
         loaded_names = {model.name for model in ollama.loaded_models}
@@ -1010,13 +1436,15 @@ class AgentopApp(App):
         table.clear()
         for port in ports:
             category = port.category.value if port.category else "-"
-            table.add_row(
+            values = (
                 str(port.port),
                 str(port.pid),
                 port.process_name,
                 category,
-                key=f"{port.port}:{port.pid}",
             )
+            if self._table_layout_mode == "narrow":
+                values = (values[0], values[2], values[3])
+            table.add_row(*values, key=f"{port.port}:{port.pid}")
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.row_key.value is None:
@@ -1039,14 +1467,34 @@ class AgentopApp(App):
         event.data_table.sort(event.column_key)
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id != "model-filter":
-            return
-        self._model_filter = event.value.strip()
-        self._update_models_tables(self._ollama_status)
+        if event.input.id == "model-filter":
+            self._model_filter = event.value.strip()
+            self._update_models_tables(self._ollama_status)
+        elif event.input.id == "playground-rounds":
+            self._update_playground_mode_controls()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "playground-prompt":
+            self._start_playground()
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "playground-mode" or (
+            event.select.id and event.select.id.startswith("playground-model-")
+        ):
+            self._update_playground_mode_controls()
 
     def action_show_tab(self, tab_id: str) -> None:
         self.remove_class("detail-open")
         self.query_one("#main-tabs", TabbedContent).active = tab_id
+        self._update_key_bar(tab_id)
+
+    def on_tabbed_content_tab_activated(
+        self,
+        event: TabbedContent.TabActivated,
+    ) -> None:
+        if event.tabbed_content.id == "main-tabs" and event.pane.id:
+            self.remove_class("detail-open")
+            self._update_key_bar(event.pane.id)
 
     def action_focus_model_filter(self) -> None:
         if self.query_one("#main-tabs", TabbedContent).active == "tab-models":
@@ -1092,6 +1540,320 @@ class AgentopApp(App):
 
     def action_show_help(self) -> None:
         self.push_screen(HelpScreen())
+
+    def _update_playground_model_options(self, ollama: OllamaStatus) -> None:
+        names = tuple(model.name for model in ollama.available_models)
+        if names == self._playground_model_options:
+            return
+        self._playground_model_options = names
+        options = tuple((name, name) for name in names)
+        for index in range(3):
+            select = self.query_one(f"#playground-model-{index + 1}", Select)
+            previous = select.value if isinstance(select.value, str) else ""
+            select.set_options(options)
+            if names:
+                select.value = previous if previous in names else names[min(index, len(names) - 1)]
+            select.disabled = self._playground_running or not names
+        self._update_playground_mode_controls()
+
+    def _playground_mode(self) -> str:
+        mode_value = self.query_one("#playground-mode", Select).value
+        return mode_value if isinstance(mode_value, str) else "solo"
+
+    def _playground_selected_values(self, count: int) -> tuple[str, ...]:
+        return tuple(
+            value
+            for index in range(count)
+            if isinstance(
+                value := self.query_one(
+                    f"#playground-model-{index + 1}",
+                    Select,
+                ).value,
+                str,
+            )
+        )
+
+    def _playground_rounds_are_valid(self, mode: str) -> bool:
+        if mode == "solo":
+            return True
+        raw = self.query_one("#playground-rounds", Input).value.strip()
+        return raw.isdigit() and 1 <= int(raw) <= 100
+
+    def _playground_setup_issue(self, mode: str, count: int) -> str:
+        if not self._playground_model_options:
+            return "No local models found · install or pull a model in Ollama first."
+        selected = self._playground_selected_values(count)
+        if len(selected) != count:
+            return "Choose a model for every seat."
+        if len(set(selected)) != len(selected):
+            return "Choose a different model for each roundtable seat."
+        if not self._playground_rounds_are_valid(mode):
+            return "Rounds must be a number from 1 to 100."
+        return ""
+
+    def _playground_setup_changed(self, mode: str, count: int) -> bool:
+        if not self._playground_entries or self._playground_session_key is None:
+            return False
+        selected = self._playground_selected_values(count)
+        return len(selected) == count and (mode, *selected) != self._playground_session_key
+
+    def _update_playground_mode_controls(self) -> None:
+        controls = list(self.query("#playground-mode"))
+        if not controls:
+            return
+        mode = self._playground_mode()
+        count = _PLAYGROUND_MODE_COUNTS.get(mode, 1)
+        for index in range(3):
+            wrapper = self.query_one(f"#playground-model-{index + 1}-wrap")
+            wrapper.display = index < count
+            select = self.query_one(f"#playground-model-{index + 1}", Select)
+            select.disabled = (
+                self._playground_running
+                or index >= count
+                or not self._playground_model_options
+            )
+        self.query_one("#playground-rounds-wrap").display = count > 1
+        self.query_one("#playground-mode", Select).disabled = self._playground_running
+        rounds = self.query_one("#playground-rounds", Input)
+        rounds.disabled = self._playground_running
+        rounds.set_class(
+            count > 1 and not self._playground_rounds_are_valid(mode),
+            "invalid",
+        )
+        prompt = self.query_one("#playground-prompt", Input)
+        prompt.placeholder = _PLAYGROUND_PROMPTS.get(
+            mode,
+            _PLAYGROUND_PROMPTS["solo"],
+        )
+        prompt.disabled = self._playground_running or not self._playground_model_options
+        issue = self._playground_setup_issue(mode, count)
+        self.query_one("#btn-playground-run", Button).disabled = (
+            self._playground_running or bool(issue)
+        )
+        self.query_one("#btn-playground-stop", Button).disabled = (
+            not self._playground_running
+        )
+        self.query_one("#btn-playground-clear", Button).disabled = (
+            self._playground_running
+        )
+        if not self._playground_running:
+            status = self.query_one("#playground-status", Label)
+            if issue:
+                status.update(issue)
+            elif self._playground_setup_changed(mode, count):
+                status.update("Setup changed · Run starts a new conversation.")
+            elif not self._playground_entries:
+                status.update(
+                    "Ready · Enter runs one model."
+                    if mode == "solo"
+                    else f"Ready · {count} models respond in order each round."
+                )
+
+    def _selected_playground_models(self) -> tuple[str, tuple[str, ...]] | None:
+        mode = self._playground_mode()
+        count = _PLAYGROUND_MODE_COUNTS.get(mode, 1)
+        issue = self._playground_setup_issue(mode, count)
+        if issue:
+            self.notify(issue, severity="error")
+            return None
+        models = self._playground_selected_values(count)
+        if len(set(models)) != len(models):
+            self.notify("Choose distinct models for a roundtable.", severity="error")
+            return None
+        return mode, models
+
+    def _playground_round_count(self, mode: str) -> int | None:
+        if mode == "solo":
+            return 1
+        raw = self.query_one("#playground-rounds", Input).value.strip()
+        if not self._playground_rounds_are_valid(mode):
+            self.notify("Rounds must be between 1 and 100.", severity="error")
+            return None
+        return int(raw)
+
+    def _set_playground_running(self, running: bool) -> None:
+        self._playground_running = running
+        self._update_playground_mode_controls()
+
+    def _playground_speaker_style(self, speaker: str) -> str:
+        if speaker == "User":
+            return "#5EE6A8"
+        participants = (
+            self._playground_session_key[1:]
+            if self._playground_session_key is not None
+            else ()
+        )
+        try:
+            return _PLAYGROUND_MODEL_STYLES[participants.index(speaker)]
+        except (ValueError, IndexError):
+            return _PLAYGROUND_MODEL_STYLES[0]
+
+    def _playground_speaker_label(self, speaker: str) -> str:
+        if speaker == "User":
+            return "YOU"
+        participants = (
+            self._playground_session_key[1:]
+            if self._playground_session_key is not None
+            else ()
+        )
+        try:
+            seat = chr(ord("A") + participants.index(speaker))
+        except ValueError:
+            return speaker
+        return f"[{seat}]  {speaker}"
+
+    def _playground_entry_panel(self, entry: ConversationEntry) -> Panel:
+        style = self._playground_speaker_style(entry.speaker)
+        return Panel(
+            Text(entry.content, style="#C6D0D6"),
+            title=Text(
+                self._playground_speaker_label(entry.speaker),
+                style=f"bold {style}",
+            ),
+            title_align="left",
+            border_style=style,
+            padding=(0, 1),
+            expand=True,
+        )
+
+    def _write_playground_entry(self, entry: ConversationEntry) -> None:
+        log = self.query_one("#playground-transcript", RichLog)
+        if self._playground_transcript_empty:
+            log.clear()
+            self._playground_transcript_empty = False
+        log.write(self._playground_entry_panel(entry), expand=True)
+        log.write("")
+
+    def _write_playground_round_header(
+        self,
+        round_number: int,
+        round_count: int,
+    ) -> None:
+        self.query_one("#playground-transcript", RichLog).write(
+            Rule(
+                Text(
+                    f"ROUND {round_number} OF {round_count}",
+                    style="bold #8A98A0",
+                ),
+                style="#46525A",
+            ),
+            expand=True,
+        )
+
+    def _show_playground_empty_state(self) -> None:
+        log = self.query_one("#playground-transcript", RichLog)
+        log.clear()
+        log.write(Text("Start a local conversation", style="bold #E8EEF1"))
+        log.write(
+            Text(
+                "Choose Solo, 2 models, or 3 models above. "
+                "Enter a prompt below, then press Enter or click Run.",
+                style="#8A98A0",
+            )
+        )
+        self._playground_transcript_empty = True
+
+    def _start_playground(self) -> None:
+        if self._playground_running:
+            return
+        self._playground_worker = self.run_worker(
+            self._run_playground(),
+            exclusive=True,
+            group="playground",
+        )
+
+    def _stop_playground(self) -> None:
+        if self._playground_worker is None:
+            return
+        self.query_one("#playground-status", Label).update("Stopping...")
+        self._playground_worker.cancel()
+
+    def _clear_playground(self) -> None:
+        self._playground_entries.clear()
+        self._playground_session_key = None
+        self._show_playground_empty_state()
+        self.query_one("#playground-prompt", Input).value = ""
+        self._update_playground_mode_controls()
+
+    async def _run_playground(self) -> None:
+        prompt = self.query_one("#playground-prompt", Input).value.strip()
+        if not prompt:
+            self.notify("Enter a prompt or roundtable topic.", severity="error")
+            self._playground_worker = None
+            return
+        selection = self._selected_playground_models()
+        if selection is None:
+            self._playground_worker = None
+            return
+        mode, models = selection
+        rounds = self._playground_round_count(mode)
+        if rounds is None:
+            self._playground_worker = None
+            return
+
+        session_key = (mode, *models)
+        if self._playground_session_key != session_key:
+            setup_changed = bool(self._playground_entries)
+            self._playground_entries.clear()
+            self.query_one("#playground-transcript", RichLog).clear()
+            self._playground_transcript_empty = False
+            self._playground_session_key = session_key
+            if setup_changed:
+                self.notify(
+                    "Started a new conversation because the setup changed.",
+                    timeout=5,
+                )
+
+        user_entry = ConversationEntry("User", prompt)
+        self._playground_entries.append(user_entry)
+        self._write_playground_entry(user_entry)
+        self._set_playground_running(True)
+        status = self.query_one("#playground-status", Label)
+        try:
+            if mode == "solo":
+                model = models[0]
+                status.update(f"Running {model}...")
+                content = await self.client.chat(
+                    model,
+                    build_solo_messages(self._playground_entries, model=model),
+                )
+                entry = ConversationEntry(model, content)
+                self._playground_entries.append(entry)
+                self._write_playground_entry(entry)
+            else:
+                for round_number in range(1, rounds + 1):
+                    self._write_playground_round_header(round_number, rounds)
+                    for model in models:
+                        status.update(
+                            f"Round {round_number}/{rounds} · running {model}..."
+                        )
+                        content = await self.client.chat(
+                            model,
+                            build_roundtable_messages(
+                                self._playground_entries,
+                                topic=prompt,
+                                model=model,
+                                participants=models,
+                                round_number=round_number,
+                            ),
+                        )
+                        entry = ConversationEntry(model, content)
+                        self._playground_entries.append(entry)
+                        self._write_playground_entry(entry)
+            status.update(
+                f"Complete · {len(models)} model{'s' if len(models) != 1 else ''}."
+            )
+            self.query_one("#playground-prompt", Input).value = ""
+            self._trigger_refresh()
+        except asyncio.CancelledError:
+            status.update("Stopped · partial conversation kept; edit the prompt to continue.")
+            raise
+        except (httpx.HTTPError, OSError, ValueError) as exc:
+            status.update("Failed · see notification.")
+            self.notify(f"Ollama run failed: {exc}", severity="error", timeout=8)
+        finally:
+            self._playground_worker = None
+            self._set_playground_running(False)
 
     def _selected_model_size(self) -> float:
         model, _ = self._selected_model()
@@ -1568,3 +2330,9 @@ class AgentopApp(App):
             self.run_worker(self._toggle_selected_pin())
         elif button_id == "btn-model-trim":
             self.run_worker(self._trim_selected_context())
+        elif button_id == "btn-playground-run":
+            self._start_playground()
+        elif button_id == "btn-playground-stop":
+            self._stop_playground()
+        elif button_id == "btn-playground-clear":
+            self._clear_playground()
