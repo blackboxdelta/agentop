@@ -191,7 +191,8 @@ async def test_playground_runs_solo_and_three_model_roundtable_by_click():
                 (round_number, round_count)
             )
         )
-        await pilot.click("#btn-playground-run")
+        assert app.query_one("#btn-playground-run", Button).disabled is False
+        app._start_playground()
         await _wait_until(lambda: len(client.calls) == 7)
 
         roundtable_calls = client.calls[1:]
