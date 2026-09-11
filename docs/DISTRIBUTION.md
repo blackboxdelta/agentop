@@ -86,6 +86,6 @@ agentop --help
    responses; documentation images must not contain local user data.
 
 3. Commit regenerated documentation assets with the related UI changes.
-4. Push a tag such as `v0.3.0`.
+4. Push a tag such as `v0.4.0`.
 5. Confirm both GitHub Actions matrix jobs pass and that their checksums match
    the release attachments.
