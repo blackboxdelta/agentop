@@ -112,6 +112,16 @@ def _button_label_text(button: Button) -> str:
     return label.plain if hasattr(label, "plain") else str(label)
 
 
+def test_warm_indicator_timer_is_safe_before_mount():
+    app = AgentopApp(refresh_interval=100)
+    app._warm_ready_model_name = "model-a"
+
+    app._tick_warm_ready_indicator()
+
+    assert app._warm_ready_model_name is None
+    assert app._warm_ready_indent == 0
+
+
 @pytest.mark.asyncio
 async def test_app_boots_and_populates_tables():
     app = AgentopApp(refresh_interval=100)  # avoid a second auto-refresh mid-test

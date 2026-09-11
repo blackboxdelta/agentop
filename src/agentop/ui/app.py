@@ -1177,12 +1177,19 @@ class AgentopApp(App):
         self._warm_ready_model_name = None
 
     def _tick_warm_ready_indicator(self) -> None:
+        if not self.screen_stack:
+            self._reset_warm_ready_indicator()
+            return
         if (
             self._warm_ready_model_name is None
             or self._warm_ready_indent >= _WARM_READY_INDENT_MAX
         ):
             return
-        warm_button = self.query_one("#btn-model-warm", Button)
+        warm_buttons = list(self.query("#btn-model-warm"))
+        if not warm_buttons:
+            self._reset_warm_ready_indicator()
+            return
+        warm_button = warm_buttons[0]
         if warm_button.disabled:
             self._reset_warm_ready_indicator()
             warm_button.label = "Warm"
